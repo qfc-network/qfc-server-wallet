@@ -1,0 +1,17 @@
+[package]
+name = "qfc-quorum"
+description = "M-of-N approver coordination for QFC server wallet."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+async-trait.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+tracing.workspace = true

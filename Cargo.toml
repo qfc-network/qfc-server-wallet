@@ -1,0 +1,85 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/qfc-server-wallet",
+    "crates/qfc-enclave",
+    "crates/qfc-sss",
+    "crates/qfc-policy",
+    "crates/qfc-quorum",
+    "crates/qfc-audit",
+]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2021"
+authors = ["QFC Network <maintainers@qfc.network>"]
+license = "Apache-2.0"
+repository = "https://github.com/qfc-network/qfc-server-wallet"
+homepage = "https://qfc.network"
+rust-version = "1.88"
+
+[workspace.dependencies]
+# Async runtime
+tokio = { version = "1.40", features = ["macros", "rt-multi-thread", "sync", "time", "fs", "io-util"] }
+async-trait = "0.1"
+futures = "0.3"
+
+# Errors
+thiserror = "1.0"
+anyhow = "1.0"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_bytes = "0.11"
+
+# IDs / time
+ulid = { version = "1.1", features = ["serde"] }
+time = { version = "0.3", features = ["serde", "formatting", "parsing"] }
+
+# Crypto — secret material handling
+zeroize = { version = "1.7", features = ["zeroize_derive"] }
+subtle = "2.5"
+rand = "0.8"
+rand_core = "0.6"
+
+# Curves
+ed25519-dalek = { version = "2.1", features = ["serde", "rand_core", "zeroize"] }
+k256 = { version = "0.13", features = ["ecdsa", "serde", "sha256"] }
+
+# Hashing
+blake3 = "1.5"
+sha2 = "0.10"
+sha3 = "0.10"
+hmac = "0.12"
+
+# HD wallets
+bip32 = { version = "0.5", features = ["secp256k1", "mnemonic"] }
+bip39 = "2.0"
+
+# SSS
+vsss-rs = "4.3"
+
+# Encoding
+hex = "0.4"
+bs58 = "0.5"
+base64 = "0.22"
+
+# Tracing & metrics
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Testing
+proptest = "1.5"
+tokio-test = "0.4"
+tempfile = "3.10"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+
+[profile.dev]
+opt-level = 1
+debug = true

@@ -1,0 +1,8 @@
+[toolchain]
+# Pinned exact patch version for reproducibility (RFC §9.5).
+# - >= 1.85 required: edition 2024 transitive deps (wasip2 → wit-bindgen 0.57)
+# - >= 1.88 required: current cargo-deny releases parse CVSS 4.0 RUSTSEC entries
+# Revisit pin policy when M3 reproducible EIF builds land.
+channel = "1.88.0"
+components = ["rustfmt", "clippy", "rust-src"]
+profile = "minimal"

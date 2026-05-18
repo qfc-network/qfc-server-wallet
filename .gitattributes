@@ -1,0 +1,16 @@
+# Normalize line endings across platforms
+* text=auto eol=lf
+
+# Force LF for source files
+*.rs       text eol=lf
+*.toml     text eol=lf
+*.md       text eol=lf
+*.yml      text eol=lf
+*.yaml     text eol=lf
+*.json     text eol=lf
+*.sh       text eol=lf
+
+# Treat enclave artifacts as binary (no diff, no merge)
+*.eif         binary
+*.pcr         binary
+enclave/build/** binary

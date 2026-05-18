@@ -1,0 +1,19 @@
+[package]
+name = "qfc-enclave"
+description = "TEE abstraction for QFC server wallet: Enclave trait, MockEnclave (M1), NitroEnclave (M3)."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+async-trait.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+zeroize.workspace = true
+tracing.workspace = true

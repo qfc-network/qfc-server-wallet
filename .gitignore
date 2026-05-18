@@ -1,0 +1,48 @@
+# Rust
+/target/
+**/*.rs.bk
+*.pdb
+
+# Workspace lock — we DO commit Cargo.lock at the workspace root for
+# reproducible binary builds; the line below is intentionally absent.
+# (Library crates without their own lockfile inherit from the workspace.)
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# direnv
+.envrc
+.direnv/
+
+# Enclave build artifacts (M3+)
+enclave/build/
+enclave/*.eif
+enclave/*.pcr
+
+# Local policy overrides (operators occasionally drop *.local.json files for testing)
+examples/policies/*.local.json
+policies/*.local.json
+
+# Coverage / profiling
+*.profraw
+*.profdata
+tarpaulin-report.html
+cobertura.xml
+lcov.info
+
+# Cargo
+**/Cargo.lock.bak
+
+# Secrets — defensive only; real secrets must never be in tree
+*.pem
+*.key
+*.p12
+secrets/

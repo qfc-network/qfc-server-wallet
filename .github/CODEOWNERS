@@ -1,0 +1,22 @@
+# Required reviewers per RFC §12.6 and CONTRIBUTING.md.
+# Two reviewers required on crypto / enclave / SSS changes; one elsewhere.
+# TODO(larry): populate handles before public repo creation.
+
+# Default: project maintainers
+*                                       @qfc-network/maintainers
+
+# Crypto-sensitive areas — require crypto reviewer team
+/crates/qfc-enclave/                    @qfc-network/maintainers @qfc-network/crypto
+/crates/qfc-sss/                        @qfc-network/maintainers @qfc-network/crypto
+/enclave/                               @qfc-network/maintainers @qfc-network/crypto
+
+# Policy DSL changes touch product surface
+/crates/qfc-policy/                     @qfc-network/maintainers
+
+# Workflows, deny, vet, supply chain — security-sensitive infra
+/.github/workflows/                     @qfc-network/maintainers @qfc-network/security
+/deny.toml                              @qfc-network/maintainers @qfc-network/security
+/supply-chain/                          @qfc-network/maintainers @qfc-network/security
+
+# Docs — anyone can review docs
+/docs/                                  @qfc-network/maintainers

@@ -1,0 +1,21 @@
+name: cargo-vet
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  vet:
+    name: cargo-vet
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo install cargo-vet --locked
+      # cargo vet has not been initialized with audits yet (M1); the supply-chain/
+      # config.toml exists but `cargo vet --locked` may exit non-zero until audits
+      # land. The step is wired but tolerant until the first audit is recorded.
+      - run: cargo vet --locked || echo "::warning::cargo vet not yet seeded; tolerated pre-M1"
