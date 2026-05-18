@@ -990,7 +990,7 @@ All open decisions from v0.1 §10 are resolved below. Each entry: decision, wher
 | 8 | KMS choice in production | **AWS KMS for M3 baseline**; **Vault Transit as second backend** for cross-cloud customers, planned for M3+ or M4. Trait stays `KmsBackend`. | §2.2, §7 | AWS KMS gives us attestation-conditional decrypt natively for Nitro; Vault unlocks GCP/on-prem deployments without rewriting the share path. |
 | 9 | Approver notification channels at M4 launch | **Webhook (mandatory)** + **email (optional)** + **QFC on-chain event (for `Chain` approver identities)**. Telegram/Slack/PagerDuty added post-M4 as plug-in channels. | §7 (M4) | Webhook is the universal integration; on-chain events compose with on-chain governance; email is the "nothing else works" fallback. |
 | 10 | Rate-limit primitives | **Token bucket per (wallet, requester) tuple.** Sliding window not adopted. | §2.4 (policy DSL) | Token bucket is predictable, cheap to reason about, easy to expose in policy DSL; sliding-window subtleties don't earn their complexity here. |
-| 11 | Where to land this RFC initially | **Currently here**: `/Users/larry/develop/qfc-blockchain/qfc-server-wallet-rfc/docs/`. **Migrates to `qfc-server-wallet/docs/`** once the public repo is created (see §12). | — | RFC keeps moving with the project; staging dir keeps history before the repo exists. |
+| 11 | Where to land this RFC | **Migrated** into `qfc-server-wallet/docs/server-wallet-rfc.md` (this file). The v0.1 draft was staged in a sibling workspace before the public repo existed; that staging directory is now archival. | — | RFC moves with the project so PRs that change architecture also change the document. |
 
 ---
 

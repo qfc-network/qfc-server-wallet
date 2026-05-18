@@ -1,6 +1,7 @@
 # Required reviewers per RFC §12.6 and CONTRIBUTING.md.
 # Two reviewers required on crypto / enclave / SSS changes; one elsewhere.
-# TODO(larry): populate handles before public repo creation.
+# TODO: populate handles before this file becomes the source of truth for
+# branch-protection required reviewers.
 
 # Default: project maintainers
 *                                       @qfc-network/maintainers
