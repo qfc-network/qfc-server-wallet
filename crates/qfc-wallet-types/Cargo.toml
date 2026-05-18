@@ -1,0 +1,23 @@
+[package]
+name = "qfc-wallet-types"
+description = "Internal shared types for the QFC server wallet workspace (IDs, schemes, secret material wrappers)."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+serde.workspace = true
+ulid.workspace = true
+zeroize.workspace = true
+subtle.workspace = true
+thiserror.workspace = true
+hex.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+proptest.workspace = true
