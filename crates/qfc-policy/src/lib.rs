@@ -13,6 +13,7 @@
 #![allow(clippy::module_name_repetitions)]
 
 pub mod decision;
+pub mod decoders;
 pub mod policy;
 pub mod rate_limit;
 pub mod request;
@@ -22,6 +23,9 @@ pub mod static_policy;
 pub mod vm;
 
 pub use decision::{DenyReason, PolicyDecision, PolicyError, RuleEffect, RuleHit};
+pub use decoders::{
+    decode_evm_tx, AccessListItem, DecodedEvmTx, EvmDecodeError, EvmDecoder, EvmTxType,
+};
 pub use policy::Policy;
 pub use rate_limit::{Clock, ManualClock, SystemClock, TokenBucketLimiter};
 pub use request::{Requester, SigningPayload, SigningRequest, VmType};

@@ -23,6 +23,9 @@ time.workspace = true
 primitive-types.workspace = true
 hex.workspace = true
 
+# EVM decoder (M2 P4)
+alloy-rlp.workspace = true
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 proptest.workspace = true
