@@ -783,6 +783,7 @@ dependencies = [
  "hmac",
  "k256",
  "proptest",
+ "qfc-sss",
  "qfc-wallet-types",
  "rand 0.8.6",
  "rand_core 0.6.4",
@@ -792,6 +793,8 @@ dependencies = [
  "sha3",
  "subtle",
  "thiserror",
+ "time",
+ "tokio",
  "tracing",
  "zeroize",
 ]

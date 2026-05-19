@@ -1,0 +1,190 @@
+//! The `Enclave` trait — the TEE boundary the rest of the system targets.
+//!
+//! See `docs/server-wallet-rfc.md` §2.1, §4.1, §4.2, §4.3.
+//!
+//! M1 ships the trait and an in-process `MockEnclave` (see `enclaves::mock`).
+//! Real `NitroEnclave` arrives in M3.
+//!
+//! ## M1 simplifications vs RFC §2.1
+//!
+//! - `EnclaveSignRequest` does not yet carry `policy_decision` or
+//!   `approvals`. P5 adds the `qfc-policy` / `qfc-quorum` types and the
+//!   enclave-side hybrid invariant re-check (RFC §2.1 decision #2).
+//! - Shares are `qfc_sss::ShamirShare` directly rather than the
+//!   KMS-wrapped `EncryptedShare` envelope. KMS wrapping is M3 with
+//!   `S3KmsShareStore`.
+//!
+//! The trait shape is forwards-compatible: the additions land as new
+//! optional fields, not changes to the existing ones.
+
+use async_trait::async_trait;
+use qfc_sss::ShamirShare;
+use qfc_wallet_types::{HashAlg, HdPath, RequestId, SigningScheme, WalletId};
+use serde::{Deserialize, Serialize};
+use thiserror::Error;
+
+use crate::attestation::{AttestationDoc, AttestationError};
+use crate::error::{DerivationError, SignerError};
+
+/// Errors raised by `Enclave` implementations.
+#[derive(Debug, Error)]
+pub enum EnclaveError {
+    /// The mock backend was constructed without the `QFC_ALLOW_MOCK_ENCLAVE`
+    /// safety env var. Fail-closed by design.
+    #[error("mock enclave disabled: set QFC_ALLOW_MOCK_ENCLAVE=yes-i-know to opt in (M1 only)")]
+    MockNotAllowed,
+
+    /// Number of supplied shares is less than the threshold.
+    #[error("not enough shares: need {threshold}, got {provided}")]
+    NotEnoughShares {
+        /// Required threshold.
+        threshold: u8,
+        /// Number of shares actually supplied.
+        provided: usize,
+    },
+
+    /// Shares disagreed on parameters or had duplicate indices.
+    #[error("inconsistent shares: {0}")]
+    InconsistentShares(&'static str),
+
+    /// SSS combination failed.
+    #[error("sss error: {0}")]
+    Sss(#[from] qfc_sss::ShareError),
+
+    /// HD derivation failed.
+    #[error("derivation error: {0}")]
+    Derivation(#[from] DerivationError),
+
+    /// Signer rejected the input.
+    #[error("signer error: {0}")]
+    Signer(#[from] SignerError),
+
+    /// Attestation issuance failed.
+    #[error("attestation error: {0}")]
+    Attestation(#[from] AttestationError),
+
+    /// PQ scheme requested but not implemented yet (M5).
+    #[error("scheme {0} is not implemented in this milestone")]
+    SchemeNotImplemented(&'static str),
+
+    /// Caller's request does not match an internal invariant.
+    #[error("invalid request: {0}")]
+    InvalidRequest(&'static str),
+}
+
+/// Free-form signing context bound by the attestation.
+///
+/// `chain_id` and `vm_type` are the two cross-cutting fields the RFC names
+/// explicitly. Everything else (request-time metadata that should also be
+/// bound) is carried in `extra` so callers can extend without breaking
+/// the trait shape.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SigningContext {
+    /// Optional chain identifier (e.g. EVM `chainId`).
+    pub chain_id: Option<u64>,
+    /// Optional VM type label (e.g. `"evm"`, `"qvm"`, `"wasm"`).
+    pub vm_type: Option<String>,
+    /// Open extension space; the enclave canonically serializes this as
+    /// JSON and includes it in `user_data` for the attestation.
+    pub extra: serde_json::Value,
+}
+
+/// Input to `Enclave::sign_in_enclave`.
+pub struct EnclaveSignRequest {
+    /// Identifier for this signing request. Bound into the attestation.
+    pub request_id: RequestId,
+    /// Wallet to sign on behalf of. Used for share/identity cross-checking.
+    pub wallet_id: WalletId,
+    /// Shares to reconstruct the master seed from. Must be at least
+    /// `params.threshold` and consistent with each other.
+    pub shares: Vec<ShamirShare>,
+    /// Signing scheme.
+    pub scheme: SigningScheme,
+    /// Optional HD derivation path. `None` means sign with the master key
+    /// directly. Required to be `None` for PQ schemes (RFC §9.1).
+    pub hd_path: Option<HdPath>,
+    /// Raw message bytes to sign.
+    pub message: Vec<u8>,
+    /// Pre-hash for the signer to apply (or `None` for ed25519).
+    pub hash_alg: HashAlg,
+    /// Arbitrary context to bind into the attestation.
+    pub context: SigningContext,
+}
+
+/// Output of `Enclave::sign_in_enclave`.
+#[derive(Debug, Clone)]
+pub struct EnclaveSignResponse {
+    /// The signature bytes (layout depends on scheme; see signers docs).
+    pub signature: Vec<u8>,
+    /// The (derived) public key associated with the signing key.
+    pub public_key: Vec<u8>,
+    /// Attestation binding `(request_id || message_hash || signature_hash || …)`.
+    pub attestation: AttestationDoc,
+}
+
+/// Input to `Enclave::generate_wallet`.
+pub struct GenerateWalletRequest {
+    /// Identifier for the new wallet. The enclave does not invent this;
+    /// the orchestrator assigns it so that the wallet's IDs match the
+    /// rest of the system from creation onward.
+    pub wallet_id: WalletId,
+    /// Scheme of the master key to generate.
+    pub scheme: SigningScheme,
+    /// SSS threshold `M`.
+    pub threshold: u8,
+    /// SSS total shares `N`.
+    pub total: u8,
+    /// HD path used to derive the *reported* public key. For PQ schemes,
+    /// must be `None`. For classical schemes, `None` derives the master
+    /// (m/) pubkey; non-`None` returns the pubkey at that derivation.
+    pub master_hd_path: Option<HdPath>,
+}
+
+/// Output of `Enclave::generate_wallet`.
+#[derive(Debug, Clone)]
+pub struct GenerateWalletResponse {
+    /// Newly created Shamir shares. The caller stores them via a `ShareStore`.
+    pub shares: Vec<ShamirShare>,
+    /// Public key derived at `master_hd_path` (or the master key if `None`).
+    pub master_public_key: Vec<u8>,
+    /// Attestation binding `(wallet_id || master_public_key || share_index_set)`.
+    pub attestation: AttestationDoc,
+}
+
+/// The TEE boundary the rest of the system targets.
+#[async_trait]
+pub trait Enclave: Send + Sync {
+    /// Produce a fresh attestation document. The `nonce` is included in
+    /// the attestation so callers can prove freshness across runs.
+    ///
+    /// # Errors
+    ///
+    /// Backend-specific. Mock returns `EnclaveError::Attestation` on
+    /// serialization failure.
+    async fn attest(&self, nonce: [u8; 32]) -> Result<AttestationDoc, EnclaveError>;
+
+    /// Reconstruct the secret, derive (if applicable), sign, and emit an
+    /// attestation binding the inputs and outputs.
+    ///
+    /// # Errors
+    ///
+    /// Per `EnclaveError`. Common cases: insufficient / inconsistent
+    /// shares, scheme not implemented, signer rejection, derivation failure.
+    async fn sign_in_enclave(
+        &self,
+        req: EnclaveSignRequest,
+    ) -> Result<EnclaveSignResponse, EnclaveError>;
+
+    /// Generate a fresh master seed inside the enclave, split it via SSS,
+    /// derive the reported public key, and zeroize the seed before
+    /// returning. The shares cross the boundary as `ShamirShare`; the
+    /// caller is responsible for persisting them via a `ShareStore`.
+    ///
+    /// # Errors
+    ///
+    /// Per `EnclaveError`. PQ schemes return `SchemeNotImplemented`.
+    async fn generate_wallet(
+        &self,
+        req: GenerateWalletRequest,
+    ) -> Result<GenerateWalletResponse, EnclaveError>;
+}

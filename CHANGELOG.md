@@ -23,6 +23,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `MockShareStore`: in-memory `tokio::sync::RwLock<HashMap>` for tests and dev only.
   - `LocalFsShareStore`: filesystem-backed with XChaCha20-Poly1305 AEAD at-rest encryption. Per-write random 24-byte nonce, magic-prefixed file format, atomic write via `tempfile + rename`. Constructor takes a raw 32-byte key (passphrase / KDF wrapping is intentionally an operator-startup concern, not part of this layer).
   - 20 new tests including wrong-key rejection, ciphertext-tamper rejection, truncated-file rejection, on-disk-bytes-are-actually-encrypted assertion.
+- **M1 P4**: enclave abstraction and in-process mock.
+  - `qfc-enclave::Enclave` async trait: `attest`, `sign_in_enclave`, `generate_wallet`. Forwards-compatible shape; P5 adds optional `policy_decision` and `approvals` fields without breaking it.
+  - `qfc-enclave::attestation::{AttestationDoc, AttestationPayload, MockAttestationKey}` — JSON-canonical payload (`BTreeMap` for `pcrs`), ed25519 signature over `raw_payload` so verifiers re-check the exact issued bytes. `pcr_mock_sentinel()` returns the production-recognizable `0xCD * 48` pattern.
+  - `MockEnclave`: combines production crypto (k256 / ed25519-dalek / vsss-rs) in-process. `new()` is **fail-closed** unless `QFC_ALLOW_MOCK_ENCLAVE=yes-i-know`; `new_for_testing()` / `new_for_testing_with_seed()` provide explicit opt-in for tests. Sign-time attestations bind `(request_id, wallet_id, sha256(message), sha256(signature), hd_path, context_json)` into `user_data`.
+  - 18 new tests including: env-gate pure helper (no `unsafe` env mutation, no `serial_test` lock), generate→sign→external-verify across ed25519 and secp256k1+HD, attestation-tamper rejection, share-shortage rejection, duplicate-share rejection, PQ-scheme rejection, attestation `user_data` binding cross-check.
 
 ## [0.0.0] — 2026-05-19
 
