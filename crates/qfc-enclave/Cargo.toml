@@ -1,6 +1,6 @@
 [package]
 name = "qfc-enclave"
-description = "TEE abstraction for QFC server wallet: Enclave trait, MockEnclave (M1), NitroEnclave (M3)."
+description = "TEE abstraction for QFC server wallet: Enclave trait, signers, HD derivation, MockEnclave (M1), NitroEnclave (M3)."
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -11,9 +11,35 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
+qfc-wallet-types = { path = "../qfc-wallet-types", version = "0.0.0" }
+
 async-trait.workspace = true
 thiserror.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 zeroize.workspace = true
+subtle.workspace = true
 tracing.workspace = true
+
+# Curves
+ed25519-dalek.workspace = true
+k256.workspace = true
+
+# Hashing
+sha2.workspace = true
+sha3.workspace = true
+blake3.workspace = true
+hmac.workspace = true
+
+# HD derivation
+bip32.workspace = true
+bip39.workspace = true
+
+# Misc
+hex.workspace = true
+rand.workspace = true
+rand_core.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+hex.workspace = true
