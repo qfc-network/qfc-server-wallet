@@ -1,0 +1,33 @@
+meta {
+  name: 04 - Sign (raw payload)
+  type: http
+  seq: 4
+}
+
+post {
+  url: {{baseUrl}}/wallets/{{walletId}}/sign
+  body: json
+  auth: none
+}
+
+headers {
+  Accept: application/json
+  Content-Type: application/json
+  X-API-Key: {{apiKey}}
+}
+
+body:json {
+  {
+    "payload": "48656c6c6f2c20514643",
+    "encoding": "hex",
+    "context": {
+      "requester": "bruno-dev",
+      "purpose": "manual-api-test"
+    }
+  }
+}
+
+assert {
+  res.status: eq 200
+  res.body.signature: isDefined
+}

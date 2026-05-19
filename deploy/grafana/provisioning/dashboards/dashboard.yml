@@ -1,0 +1,17 @@
+# Grafana dashboard provisioning — auto-import any JSON dashboards
+# mounted at /var/lib/grafana/dashboards. We mount that path read-only
+# from ./deploy/grafana/dashboards.
+
+apiVersion: 1
+
+providers:
+  - name: qfc
+    orgId: 1
+    folder: QFC
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false

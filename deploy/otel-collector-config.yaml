@@ -1,0 +1,64 @@
+# OpenTelemetry Collector — local-dev config for qfc-server-wallet
+#
+# Pipeline (metrics):
+#   qfc-server-wallet (OTLP gRPC :4317)
+#     -> batch processor
+#     -> { debug (stdout)  +  prometheusremotewrite -> mimir:9009 }
+#
+# Pipeline (traces): collected from OTLP and dumped to stdout. We
+# don't ship them anywhere by default in dev — operators who want
+# Tempo can add it later.
+#
+# Pipeline (logs): also stdout. Real log shipping (Loki) lands later;
+# in dev we tail container stdout directly.
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+    timeout: 5s
+    send_batch_size: 512
+  # Tag everything so Mimir queries can filter by environment
+  resource:
+    attributes:
+      - key: deployment.environment
+        value: dev
+        action: upsert
+
+exporters:
+  # Stdout for visibility — handy during local dev. `verbosity: detailed`
+  # is loud; switch to `normal` if it overwhelms your terminal.
+  debug:
+    verbosity: normal
+  # Remote-write to Mimir (Prometheus-compatible push API)
+  prometheusremotewrite:
+    endpoint: http://mimir:9009/api/v1/push
+    tls:
+      insecure: true
+    # Mimir wants an org/tenant header even in single-tenant mode
+    headers:
+      X-Scope-OrgID: qfc
+
+service:
+  telemetry:
+    logs:
+      level: info
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      processors: [batch, resource]
+      exporters: [debug, prometheusremotewrite]
+    traces:
+      receivers: [otlp]
+      processors: [batch, resource]
+      exporters: [debug]
+    logs:
+      receivers: [otlp]
+      processors: [batch, resource]
+      exporters: [debug]

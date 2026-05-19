@@ -1,0 +1,22 @@
+# Grafana datasource provisioning — pointed at Mimir's Prometheus-
+# compatible query endpoint. The `prometheus` plugin works against
+# any Prom-API service, including Mimir.
+
+apiVersion: 1
+
+datasources:
+  - name: Mimir
+    type: prometheus
+    access: proxy
+    url: http://mimir:9009/prometheus
+    isDefault: true
+    editable: true
+    jsonData:
+      httpMethod: POST
+      manageAlerts: false
+      prometheusType: Mimir
+      prometheusVersion: 2.9.1
+      timeInterval: 15s
+      # Mimir even in single-tenant accepts (and may require) the org
+      # header for some endpoints; harmless here.
+    secureJsonData: {}

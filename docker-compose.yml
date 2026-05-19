@@ -1,0 +1,127 @@
+# qfc-server-wallet local development stack (M2 P6)
+#
+# Brings up the server-wallet binary plus its full observability /
+# storage backplane: Postgres (audit + wallet registry), OTLP collector,
+# Mimir (Prometheus-compatible TSDB), and Grafana (auto-provisioned with
+# a Mimir datasource and a stub dashboard).
+#
+# Usage:
+#   docker compose up --build
+#   docker compose down -v        # also wipes volumes
+#
+# After bring-up:
+#   - HTTP API:        http://localhost:8080
+#   - Prometheus:      http://localhost:9090/metrics
+#   - Grafana:         http://localhost:3000 (admin / admin)
+#   - Mimir push API:  http://localhost:9009/api/v1/push (internal)
+#   - Postgres:        localhost:5432 (qfc / qfc / qfc_wallet)
+
+name: qfc-server-wallet
+
+services:
+  qfc-server-wallet:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: qfc-server-wallet:dev
+    container_name: qfc-server-wallet
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      otel-collector:
+        condition: service_started
+    environment:
+      QFC_DATABASE_URL: postgres://qfc:qfc@postgres:5432/qfc_wallet
+      QFC_SERVER_WALLET_API_KEYS: dev-key-1
+      QFC_ALLOW_MOCK_ENCLAVE: "yes-i-know"
+      QFC_OTLP_ENDPOINT: http://otel-collector:4317
+      RUST_LOG: "qfc=debug,axum=info"
+    ports:
+      - "8080:8080"   # HTTP API
+      - "9090:9090"   # /metrics (Prometheus exposition)
+    healthcheck:
+      # /health is the M2 P1 contract; will go green once P1 lands. Until
+      # then the container is technically `unhealthy` but still routable.
+      test: ["CMD", "/app/qfc-server-wallet", "--version"]
+      interval: 15s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: qfc-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: qfc
+      POSTGRES_PASSWORD: qfc
+      POSTGRES_DB: qfc_wallet
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./deploy/postgres-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U qfc -d qfc_wallet"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    container_name: qfc-otel-collector
+    restart: unless-stopped
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ./deploy/otel-collector-config.yaml:/etc/otelcol/config.yaml:ro
+    ports:
+      - "4317:4317"   # OTLP gRPC
+      - "4318:4318"   # OTLP HTTP
+      - "8888:8888"   # collector self-metrics
+    depends_on:
+      mimir:
+        condition: service_started
+
+  mimir:
+    image: grafana/mimir:latest
+    container_name: qfc-mimir
+    restart: unless-stopped
+    command: ["-config.file=/etc/mimir/mimir.yaml"]
+    volumes:
+      - ./deploy/mimir-config.yaml:/etc/mimir/mimir.yaml:ro
+      - mimir-data:/data
+    ports:
+      - "9009:9009"   # HTTP (push + query)
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9009/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: qfc-grafana
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./deploy/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      mimir:
+        condition: service_healthy
+
+volumes:
+  postgres-data:
+  mimir-data:
+  grafana-data:
