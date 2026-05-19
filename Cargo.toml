@@ -79,6 +79,18 @@ alloy-rlp = "0.3"
 # Tracing & metrics
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+tracing-opentelemetry = "0.27"
+opentelemetry = "0.26"
+opentelemetry-otlp = { version = "0.26", features = ["grpc-tonic"] }
+opentelemetry_sdk = { version = "0.26", features = ["rt-tokio"] }
+metrics = "0.23"
+metrics-exporter-prometheus = { version = "0.15", default-features = false, features = ["http-listener"] }
+
+# Tower / HTTP middleware
+tower = "0.5"
+tower-http = { version = "0.6", features = ["trace"] }
+axum = "0.7"
+http = "1"
 
 # Postgres (used by qfc-audit M2)
 sqlx = { version = "0.8", default-features = false, features = ["postgres", "runtime-tokio-rustls", "macros", "migrate", "chrono"] }

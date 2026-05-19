@@ -8,6 +8,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **M2 P5**: observability — tracing → OTLP + metrics → Prometheus.
+  - `qfc_server_wallet::observability` module exposes `init(ObservabilityConfig) -> ObservabilityHandle`, a thin one-shot installer that wires up:
+    - `tracing-subscriber` with `EnvFilter` (composes with `RUST_LOG`) and a pretty / JSON fmt layer (`json_logs` flag).
+    - Optional `tracing-opentelemetry` layer exporting batched spans to OTLP over Tonic gRPC when `otlp_endpoint` is set.
+    - `metrics-exporter-prometheus` recorder with optional standalone HTTP listener (`prometheus_listen_addr`).
+  - `observability::http_layer()` — `tower_http::trace::TraceLayer` for per-request HTTP tracing.
+  - `observability::prometheus_endpoint(handle)` — `axum::Router` serving `GET /metrics` for embedded mounting (M2 P1's HTTP server merges this in).
+  - Canonical QFC metrics pre-registered with `# HELP` descriptions:
+    - `qfc_server_wallet_signs_total{scheme, result}` counter
+    - `qfc_server_wallet_wallets_created_total{scheme}` counter
+    - `qfc_server_wallet_audit_events_total{kind}` counter
+    - `qfc_server_wallet_sign_duration_seconds{scheme}` histogram
+    - `qfc_server_wallet_policy_evaluation_seconds` histogram
+    - `qfc_server_wallet_quorum_collect_seconds` histogram
+  - `WalletService::create_wallet`, `sign`, `get_wallet` instrumented additively with `#[tracing::instrument]` + per-stage `histogram!` / `counter!` emits — no public-API change.
+  - Versions: `opentelemetry = 0.26`, `opentelemetry-otlp = 0.26`, `opentelemetry_sdk = 0.26`, `tracing-opentelemetry = 0.27`, `metrics = 0.23`, `metrics-exporter-prometheus = 0.15`, `tower = 0.5`, `tower-http = 0.6`, `axum = 0.7`.
+  - 6 new tests (130 workspace total).
+
 - Initial Cargo workspace bootstrap per RFC v1.0 §12.
 - Six stub crates: `qfc-server-wallet`, `qfc-enclave`, `qfc-sss`, `qfc-policy`, `qfc-quorum`, `qfc-audit`.
 - Apache 2.0 license, security policy, contributor guide.

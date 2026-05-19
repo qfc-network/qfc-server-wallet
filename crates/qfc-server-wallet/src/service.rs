@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use qfc_audit::{Actor, AuditEventDraft, AuditKind, AuditSink};
 use qfc_enclave::{
@@ -21,6 +21,10 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 use tokio::sync::RwLock;
 
+use crate::observability::{
+    record_policy_evaluation, record_quorum_collect, record_sign_duration, record_sign_outcome,
+    record_wallet_created, SignResult,
+};
 use crate::wallet::{WalletConfig, WalletRecord, WalletStatus};
 
 /// Errors raised by the orchestrator.
@@ -105,6 +109,7 @@ impl WalletService {
     /// # Errors
     ///
     /// `ServiceError::WalletNotFound` if no wallet matches.
+    #[tracing::instrument(skip_all, fields(wallet_id = %wallet_id))]
     pub async fn get_wallet(&self, wallet_id: WalletId) -> Result<WalletRecord, ServiceError> {
         self.wallets
             .read()
@@ -120,12 +125,22 @@ impl WalletService {
     /// # Errors
     ///
     /// Propagates from any subsystem.
+    #[tracing::instrument(
+        skip_all,
+        fields(
+            scheme = ?config.scheme,
+            threshold = config.threshold,
+            total = config.total,
+            wallet_id = tracing::field::Empty,
+        ),
+    )]
     pub async fn create_wallet(
         &self,
         config: WalletConfig,
         owner_actor: Actor,
     ) -> Result<WalletRecord, ServiceError> {
         let wallet_id = WalletId::new();
+        tracing::Span::current().record("wallet_id", tracing::field::display(wallet_id));
         let gen = self
             .enclave
             .generate_wallet(GenerateWalletRequest {
@@ -177,6 +192,7 @@ impl WalletService {
             })
             .await?;
 
+        record_wallet_created(scheme_label(config.scheme));
         Ok(record)
     }
 
@@ -189,6 +205,15 @@ impl WalletService {
     /// hard deny; `ServiceError::Quorum` for quorum timeouts or rejected
     /// approvals; `ServiceError::WalletNotFound` for unknown wallets.
     #[allow(clippy::too_many_lines)]
+    #[tracing::instrument(
+        skip_all,
+        fields(
+            wallet_id = %wallet_id,
+            request_id = tracing::field::Empty,
+            scheme = tracing::field::Empty,
+            outcome = tracing::field::Empty,
+        ),
+    )]
     pub async fn sign(
         &self,
         wallet_id: WalletId,
@@ -198,11 +223,18 @@ impl WalletService {
         context: SigningContext,
         hash_alg: HashAlg,
     ) -> Result<EnclaveSignResponse, ServiceError> {
+        let sign_started = Instant::now();
         let wallet = self.get_wallet(wallet_id).await?;
         if wallet.status == WalletStatus::Revoked {
+            // Wallet was found-then-revoked; bump the denied counter so
+            // operators can see this distinct failure mode.
+            record_sign_outcome(scheme_label(wallet.config.scheme), SignResult::Denied);
             return Err(ServiceError::WalletNotFound(wallet_id));
         }
+        let scheme = scheme_label(wallet.config.scheme);
         let request_id = RequestId::new();
+        tracing::Span::current().record("request_id", tracing::field::display(request_id));
+        tracing::Span::current().record("scheme", scheme);
         let message = canonical_message_bytes(&payload);
         let message_hash = ApprovalRequest::message_hash_for(&message);
 
@@ -229,7 +261,9 @@ impl WalletService {
             hd_path: hd_path.clone(),
             received_at_unix_ms: current_unix_ms(),
         };
+        let policy_started = Instant::now();
         let decision = self.policy.evaluate(&signing_request).await?;
+        record_policy_evaluation(policy_started.elapsed().as_secs_f64());
         self.audit
             .emit(AuditEventDraft {
                 actor: Actor::System,
@@ -242,6 +276,9 @@ impl WalletService {
 
         match &decision {
             PolicyDecision::Deny { reason, .. } => {
+                record_sign_outcome(scheme, SignResult::Denied);
+                record_sign_duration(scheme, sign_started.elapsed().as_secs_f64());
+                tracing::Span::current().record("outcome", "denied");
                 return Err(ServiceError::PolicyDenied(format!("{reason:?}")));
             }
             PolicyDecision::RequireQuorum {
@@ -263,10 +300,12 @@ impl WalletService {
                 // larger policy DSL (M2). For M1 we expect the caller
                 // (test) to pre-stage approvals on the quorum backend so
                 // collect_approvals returns immediately.
+                let quorum_started = Instant::now();
                 let approvals = self
                     .quorum
                     .collect_approvals(&request_id, *threshold, self.quorum_timeout)
                     .await?;
+                record_quorum_collect(quorum_started.elapsed().as_secs_f64());
                 for approval in &approvals {
                     self.audit
                         .emit(AuditEventDraft {
@@ -292,6 +331,9 @@ impl WalletService {
                     .iter()
                     .find(|a| matches!(a.decision, qfc_quorum::ApprovalDecision::Reject))
                 {
+                    record_sign_outcome(scheme, SignResult::Denied);
+                    record_sign_duration(scheme, sign_started.elapsed().as_secs_f64());
+                    tracing::Span::current().record("outcome", "quorum_rejected");
                     return Err(ServiceError::Quorum(
                         qfc_quorum::QuorumError::InvalidApproval(
                             qfc_quorum::ApprovalVerifyError::WrongRequest,
@@ -351,6 +393,9 @@ impl WalletService {
                         }),
                     })
                     .await?;
+                record_sign_outcome(scheme, SignResult::Success);
+                record_sign_duration(scheme, sign_started.elapsed().as_secs_f64());
+                tracing::Span::current().record("outcome", "success");
                 Ok(r)
             }
             Err(e) => {
@@ -363,6 +408,9 @@ impl WalletService {
                         details: json!({ "error": e.to_string() }),
                     })
                     .await?;
+                record_sign_outcome(scheme, SignResult::Failed);
+                record_sign_duration(scheme, sign_started.elapsed().as_secs_f64());
+                tracing::Span::current().record("outcome", "failed");
                 Err(ServiceError::Enclave(e))
             }
         }
@@ -439,4 +487,18 @@ fn hex_encode(bytes: &[u8]) -> String {
         let _ = write!(s, "{b:02x}");
     }
     s
+}
+
+/// Stable string label for a [`SigningScheme`](qfc_wallet_types::SigningScheme),
+/// used as the `scheme` metric label.
+fn scheme_label(scheme: qfc_wallet_types::SigningScheme) -> &'static str {
+    use qfc_wallet_types::SigningScheme as S;
+    match scheme {
+        S::Ed25519 => "ed25519",
+        S::Secp256k1 => "secp256k1",
+        S::Secp256k1Recoverable => "secp256k1_recoverable",
+        S::MlDsa44 => "ml_dsa_44",
+        S::MlDsa65 => "ml_dsa_65",
+        S::MlDsa87 => "ml_dsa_87",
+    }
 }
