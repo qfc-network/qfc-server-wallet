@@ -12,6 +12,7 @@ publish = false
 
 [dependencies]
 qfc-wallet-types = { path = "../qfc-wallet-types", version = "0.0.0" }
+qfc-sss = { path = "../qfc-sss", version = "0.0.0" }
 
 async-trait.workspace = true
 thiserror.workspace = true
@@ -20,6 +21,8 @@ serde_json.workspace = true
 zeroize.workspace = true
 subtle.workspace = true
 tracing.workspace = true
+time.workspace = true
+tokio = { workspace = true, features = ["sync", "rt"] }
 
 # Curves
 ed25519-dalek.workspace = true
@@ -43,3 +46,4 @@ rand_core.workspace = true
 [dev-dependencies]
 proptest.workspace = true
 hex.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
