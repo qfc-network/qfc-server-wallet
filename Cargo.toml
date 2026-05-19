@@ -37,6 +37,7 @@ serde_bytes = "0.11"
 # IDs / time
 ulid = { version = "1.1", features = ["serde"] }
 time = { version = "0.3", features = ["serde", "formatting", "parsing"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
 
 # Big-integer types (EVM U256, value-cap evaluation)
 primitive-types = { version = "0.12", default-features = false, features = ["serde"] }
@@ -79,10 +80,15 @@ alloy-rlp = "0.3"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
+# Postgres (used by qfc-audit M2)
+sqlx = { version = "0.8", default-features = false, features = ["postgres", "runtime-tokio-rustls", "macros", "migrate", "chrono"] }
+
 # Testing
 proptest = "1.5"
 tokio-test = "0.4"
 tempfile = "3.10"
+testcontainers = "0.23"
+testcontainers-modules = { version = "0.11", features = ["postgres"] }
 
 [profile.release]
 opt-level = 3

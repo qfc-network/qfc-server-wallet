@@ -14,6 +14,9 @@ allow = [
     "CC0-1.0",
     "Zlib",
     "MPL-2.0",
+    # Permissive — used by webpki-roots (transitive via sqlx → rustls).
+    # CDLA-Permissive is data-license-style permissive, not copyleft.
+    "CDLA-Permissive-2.0",
 ]
 confidence-threshold = 0.93
 exceptions = []
@@ -32,7 +35,15 @@ deny = [
 [advisories]
 db-urls = ["https://github.com/rustsec/advisory-db"]
 yanked = "deny"
-ignore = []
+ignore = [
+    # Both advisories below ride in via `testcontainers` → `bollard` and are
+    # *dev-dependency-only* (gated `#[ignore]` Postgres integration tests in
+    # `qfc-audit`). They are never linked into production binaries. Revisit
+    # when `testcontainers` adopts a maintained replacement (astral-tokio-tar
+    # for tokio-tar, rustls-pki-types for rustls-pemfile).
+    "RUSTSEC-2025-0111", # tokio-tar PAX header parsing — testcontainers chain
+    "RUSTSEC-2025-0134", # rustls-pemfile unmaintained — testcontainers chain
+]
 
 [sources]
 unknown-registry = "deny"
