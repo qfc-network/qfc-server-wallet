@@ -20,6 +20,7 @@ crates/
   qfc-policy/           # Policy DSL + evaluator + VM decoders
   qfc-quorum/           # M-of-N approver coordination
   qfc-audit/            # AuditSink trait + backends
+  qfc-wallet-types/     # internal: shared IDs, scheme/hash enums, SecretBytes
 ```
 
 ## Security
