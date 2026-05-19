@@ -11,8 +11,22 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
+qfc-wallet-types = { path = "../qfc-wallet-types", version = "0.0.0" }
+
 async-trait.workspace = true
 thiserror.workspace = true
 serde.workspace = true
 zeroize.workspace = true
 tracing.workspace = true
+
+# SSS
+vsss-rs.workspace = true
+k256.workspace = true
+
+# RNG (CSPRNG for share polynomial coefficients)
+rand.workspace = true
+rand_core.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+hex.workspace = true
