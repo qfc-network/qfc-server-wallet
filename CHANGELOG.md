@@ -33,6 +33,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `qfc-policy::Policy` async trait + `StaticAllowDenyPolicy`: M1 backend with fixed decision precedence (wallet-inactive → chain-deny → chain-allow → requester-deny → requester-allow → default). Decisions carry a `policy_id`, a `decision_id` (ULID), and a `rationale: Vec<RuleHit>` so audit traces can show *why*. Full DSL deferred to M2 per RFC §7.
   - `qfc-quorum::QuorumApprover` async trait + `MockQuorumApprover` + `ApproverIdentity` (all 4 variants: `Chain` / `External` / `Hardware` / `NestedWallet` per RFC decision #3) + `SignedApproval` with `verify(expected_request_id, expected_message_hash, now_ms)`. Enforces `MAX_APPROVAL_AGE_SECS = 3600`; rejects from-the-future timestamps. Signature verification reuses `qfc-enclave::Signer` (no new crypto surface).
   - 26 new tests; 118 total across the workspace.
+- **M1 P6**: top-level orchestrator + E2E.
+  - `qfc-server-wallet::WalletService` wires `Enclave` + `ShareStore` + `Policy` + `QuorumApprover` + `AuditSink` behind one async API: `create_wallet`, `sign`, `get_wallet`, `record_approval`.
+  - In-memory `wallets: HashMap<WalletId, WalletRecord>` registry; M2 swaps for Postgres.
+  - `sign` audits at six transition points (`SigningRequested`, `SigningEvaluated`, optional `QuorumNotified`/`QuorumApprovalReceived`, `SigningAttempted`, `SigningSucceeded`/`SigningFailed`).
+  - 6 E2E integration tests covering: ed25519 create-then-sign-then-external-verify, secp256k1 create-then-sign-then-external-verify, policy-deny blocks signing, full-flow audit-replay (13 chained events verify), unknown-wallet returns `NotFound`, quorum approval round-trip.
+  - 124 tests passing across the workspace.
+- **`docs/m1-decisions.md`**: persistent record of the 20 non-obvious decisions made during M1 (crate layout, SSS chunk size, recoverable-`v` cross-check, fail-closed mock enclave, audit chain construction, etc.).
 
 ## [0.0.0] — 2026-05-19
 

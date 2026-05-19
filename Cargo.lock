@@ -845,18 +845,22 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "ed25519-dalek",
  "qfc-audit",
  "qfc-enclave",
  "qfc-policy",
  "qfc-quorum",
  "qfc-sss",
+ "qfc-wallet-types",
  "serde",
  "serde_json",
+ "sha2",
+ "tempfile",
  "thiserror",
+ "time",
  "tokio",
  "tracing",
  "tracing-subscriber",
- "ulid",
 ]
 
 [[package]]

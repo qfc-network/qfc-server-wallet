@@ -14,5 +14,5 @@ pub mod file;
 pub mod sink;
 
 pub use event::{Actor, AuditEvent, AuditKind};
-pub use file::FileAuditSink;
-pub use sink::{AuditError, AuditSink};
+pub use file::{replay_verify, verify_event, FileAuditSink};
+pub use sink::{AuditError, AuditEventDraft, AuditSink};

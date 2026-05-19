@@ -1,0 +1,442 @@
+//! `WalletService` — the top-level orchestration surface.
+//!
+//! Mediates between policy, quorum, enclave, share store, and audit log.
+//! Crate consumers (HTTP server in M2, integration tests today) talk
+//! exclusively to this type.
+
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::Duration;
+
+use qfc_audit::{Actor, AuditEventDraft, AuditKind, AuditSink};
+use qfc_enclave::{
+    Enclave, EnclaveSignRequest, EnclaveSignResponse, GenerateWalletRequest, SigningContext,
+};
+use qfc_policy::{Policy, PolicyDecision, SigningPayload, SigningRequest};
+use qfc_quorum::{ApprovalRequest, QuorumApprover, SignedApproval};
+use qfc_sss::{ShareStore, StoredShare};
+use qfc_wallet_types::{HashAlg, HdPath, RequestId, ShareId, WalletId};
+use serde_json::json;
+use sha2::{Digest, Sha256};
+use thiserror::Error;
+use tokio::sync::RwLock;
+
+use crate::wallet::{WalletConfig, WalletRecord, WalletStatus};
+
+/// Errors raised by the orchestrator.
+#[derive(Debug, Error)]
+pub enum ServiceError {
+    /// The wallet does not exist (or has been revoked).
+    #[error("wallet not found: {0}")]
+    WalletNotFound(WalletId),
+
+    /// Policy denied the request.
+    #[error("policy denied: {0}")]
+    PolicyDenied(String),
+
+    /// Policy required quorum but quorum collection failed.
+    #[error("quorum failure: {0}")]
+    Quorum(#[from] qfc_quorum::QuorumError),
+
+    /// Underlying policy backend failed.
+    #[error("policy backend: {0}")]
+    Policy(#[from] qfc_policy::PolicyError),
+
+    /// Underlying enclave failed.
+    #[error("enclave: {0}")]
+    Enclave(#[from] qfc_enclave::EnclaveError),
+
+    /// Underlying share store failed.
+    #[error("share store: {0}")]
+    Store(#[from] qfc_sss::store::StoreError),
+
+    /// Audit log failed (best-effort; sign may still succeed but the
+    /// operator should be alerted).
+    #[error("audit: {0}")]
+    Audit(#[from] qfc_audit::AuditError),
+
+    /// Could not assemble M shares (e.g. some shares missing).
+    #[error("not enough shares available: {0}")]
+    InsufficientShares(String),
+}
+
+/// Top-level orchestrator. Holds the dependency tree as `Arc`s so it is
+/// cheap to clone for parallel request handling.
+pub struct WalletService {
+    pub(crate) enclave: Arc<dyn Enclave>,
+    pub(crate) shares: Arc<dyn ShareStore>,
+    pub(crate) policy: Arc<dyn Policy>,
+    pub(crate) quorum: Arc<dyn QuorumApprover>,
+    pub(crate) audit: Arc<dyn AuditSink>,
+    pub(crate) wallets: Arc<RwLock<HashMap<WalletId, WalletRecord>>>,
+    pub(crate) quorum_timeout: Duration,
+}
+
+impl WalletService {
+    /// Build a new `WalletService` from its subsystem dependencies.
+    #[must_use]
+    pub fn new(
+        enclave: Arc<dyn Enclave>,
+        shares: Arc<dyn ShareStore>,
+        policy: Arc<dyn Policy>,
+        quorum: Arc<dyn QuorumApprover>,
+        audit: Arc<dyn AuditSink>,
+    ) -> Self {
+        Self {
+            enclave,
+            shares,
+            policy,
+            quorum,
+            audit,
+            wallets: Arc::new(RwLock::new(HashMap::new())),
+            quorum_timeout: Duration::from_secs(120),
+        }
+    }
+
+    /// Override the quorum-collection timeout (default: 120s).
+    #[must_use]
+    pub fn with_quorum_timeout(mut self, timeout: Duration) -> Self {
+        self.quorum_timeout = timeout;
+        self
+    }
+
+    /// Borrow a wallet record by id.
+    ///
+    /// # Errors
+    ///
+    /// `ServiceError::WalletNotFound` if no wallet matches.
+    pub async fn get_wallet(&self, wallet_id: WalletId) -> Result<WalletRecord, ServiceError> {
+        self.wallets
+            .read()
+            .await
+            .get(&wallet_id)
+            .cloned()
+            .ok_or(ServiceError::WalletNotFound(wallet_id))
+    }
+
+    /// Create a new wallet end-to-end: enclave generates, shares persist,
+    /// audit logs `WalletCreated`.
+    ///
+    /// # Errors
+    ///
+    /// Propagates from any subsystem.
+    pub async fn create_wallet(
+        &self,
+        config: WalletConfig,
+        owner_actor: Actor,
+    ) -> Result<WalletRecord, ServiceError> {
+        let wallet_id = WalletId::new();
+        let gen = self
+            .enclave
+            .generate_wallet(GenerateWalletRequest {
+                wallet_id,
+                scheme: config.scheme,
+                threshold: config.threshold,
+                total: config.total,
+                master_hd_path: None,
+            })
+            .await?;
+
+        // Persist shares.
+        let now = current_unix_ms();
+        let mut share_indices: Vec<u8> = Vec::with_capacity(gen.shares.len());
+        for s in &gen.shares {
+            share_indices.push(s.index);
+            let stored = StoredShare {
+                share_id: ShareId::new(wallet_id, s.index),
+                created_at_unix_ms: now,
+                share: s.clone(),
+            };
+            self.shares.put(&stored).await?;
+        }
+
+        let record = WalletRecord {
+            wallet_id,
+            config: config.clone(),
+            master_public_key: gen.master_public_key.clone(),
+            status: WalletStatus::Active,
+            created_at_unix_ms: now,
+        };
+        self.wallets.write().await.insert(wallet_id, record.clone());
+
+        // Audit.
+        self.audit
+            .emit(AuditEventDraft {
+                actor: owner_actor,
+                kind: AuditKind::WalletCreated,
+                request_id: None,
+                wallet_id: Some(wallet_id),
+                details: json!({
+                    "scheme": config.scheme,
+                    "threshold": config.threshold,
+                    "total": config.total,
+                    "share_indices": share_indices,
+                    "master_public_key_hex": hex_encode(&gen.master_public_key),
+                    "policy_id": config.policy_id,
+                }),
+            })
+            .await?;
+
+        Ok(record)
+    }
+
+    /// Sign a message for `wallet_id`. Walks the full flow per RFC §4.2 /
+    /// §4.3.
+    ///
+    /// # Errors
+    ///
+    /// Propagates from any subsystem; `ServiceError::PolicyDenied` for a
+    /// hard deny; `ServiceError::Quorum` for quorum timeouts or rejected
+    /// approvals; `ServiceError::WalletNotFound` for unknown wallets.
+    #[allow(clippy::too_many_lines)]
+    pub async fn sign(
+        &self,
+        wallet_id: WalletId,
+        payload: SigningPayload,
+        requester: qfc_policy::Requester,
+        hd_path: Option<HdPath>,
+        context: SigningContext,
+        hash_alg: HashAlg,
+    ) -> Result<EnclaveSignResponse, ServiceError> {
+        let wallet = self.get_wallet(wallet_id).await?;
+        if wallet.status == WalletStatus::Revoked {
+            return Err(ServiceError::WalletNotFound(wallet_id));
+        }
+        let request_id = RequestId::new();
+        let message = canonical_message_bytes(&payload);
+        let message_hash = ApprovalRequest::message_hash_for(&message);
+
+        // 1. Audit the request.
+        self.audit
+            .emit(AuditEventDraft {
+                actor: requester_to_actor(&requester),
+                kind: AuditKind::SigningRequested,
+                request_id: Some(request_id),
+                wallet_id: Some(wallet_id),
+                details: json!({
+                    "message_hash_hex": hex_encode(&message_hash),
+                    "hd_path": hd_path.as_ref().map(ToString::to_string),
+                }),
+            })
+            .await?;
+
+        // 2. Policy evaluate.
+        let signing_request = SigningRequest {
+            request_id,
+            wallet_id,
+            requester: requester.clone(),
+            payload: payload.clone(),
+            hd_path: hd_path.clone(),
+            received_at_unix_ms: current_unix_ms(),
+        };
+        let decision = self.policy.evaluate(&signing_request).await?;
+        self.audit
+            .emit(AuditEventDraft {
+                actor: Actor::System,
+                kind: AuditKind::SigningEvaluated,
+                request_id: Some(request_id),
+                wallet_id: Some(wallet_id),
+                details: json!({ "decision": &decision }),
+            })
+            .await?;
+
+        match &decision {
+            PolicyDecision::Deny { reason, .. } => {
+                return Err(ServiceError::PolicyDenied(format!("{reason:?}")));
+            }
+            PolicyDecision::RequireQuorum {
+                threshold,
+                total: _,
+                ..
+            } => {
+                self.audit
+                    .emit(AuditEventDraft {
+                        actor: Actor::System,
+                        kind: AuditKind::QuorumNotified,
+                        request_id: Some(request_id),
+                        wallet_id: Some(wallet_id),
+                        details: json!({ "threshold": threshold }),
+                    })
+                    .await?;
+                // The orchestrator's job is to *coordinate* — building the
+                // approver set out of policy + wallet config is part of the
+                // larger policy DSL (M2). For M1 we expect the caller
+                // (test) to pre-stage approvals on the quorum backend so
+                // collect_approvals returns immediately.
+                let approvals = self
+                    .quorum
+                    .collect_approvals(&request_id, *threshold, self.quorum_timeout)
+                    .await?;
+                for approval in &approvals {
+                    self.audit
+                        .emit(AuditEventDraft {
+                            actor: Actor::Approver {
+                                id: approval.approver.key(),
+                            },
+                            kind: if matches!(
+                                approval.decision,
+                                qfc_quorum::ApprovalDecision::Approve
+                            ) {
+                                AuditKind::QuorumApprovalReceived
+                            } else {
+                                AuditKind::QuorumApprovalRejected
+                            },
+                            request_id: Some(request_id),
+                            wallet_id: Some(wallet_id),
+                            details: json!({ "approval_id": approval.approval_id }),
+                        })
+                        .await?;
+                }
+                // Any reject (mock surfaces the first one) blocks the sign.
+                if let Some(reject) = approvals
+                    .iter()
+                    .find(|a| matches!(a.decision, qfc_quorum::ApprovalDecision::Reject))
+                {
+                    return Err(ServiceError::Quorum(
+                        qfc_quorum::QuorumError::InvalidApproval(
+                            qfc_quorum::ApprovalVerifyError::WrongRequest,
+                        ),
+                    ))
+                    .map_err(|_| {
+                        ServiceError::PolicyDenied(format!(
+                            "quorum rejected by {}",
+                            reject.approver.key(),
+                        ))
+                    });
+                }
+            }
+            PolicyDecision::Allow { .. } => {}
+        }
+
+        // 3. Fetch shares.
+        let stored_shares = self.fetch_shares(&wallet, wallet.config.threshold).await?;
+        let raw_shares: Vec<qfc_sss::ShamirShare> =
+            stored_shares.into_iter().map(|s| s.share).collect();
+
+        // 4. Audit attempt + enclave sign.
+        self.audit
+            .emit(AuditEventDraft {
+                actor: Actor::System,
+                kind: AuditKind::SigningAttempted,
+                request_id: Some(request_id),
+                wallet_id: Some(wallet_id),
+                details: json!({}),
+            })
+            .await?;
+
+        let resp = self
+            .enclave
+            .sign_in_enclave(EnclaveSignRequest {
+                request_id,
+                wallet_id,
+                shares: raw_shares,
+                scheme: wallet.config.scheme,
+                hd_path,
+                message,
+                hash_alg,
+                context,
+            })
+            .await;
+
+        match resp {
+            Ok(r) => {
+                self.audit
+                    .emit(AuditEventDraft {
+                        actor: Actor::Enclave,
+                        kind: AuditKind::SigningSucceeded,
+                        request_id: Some(request_id),
+                        wallet_id: Some(wallet_id),
+                        details: json!({
+                            "signature_hash_hex": hex_encode(&sha256_32(&r.signature)),
+                        }),
+                    })
+                    .await?;
+                Ok(r)
+            }
+            Err(e) => {
+                self.audit
+                    .emit(AuditEventDraft {
+                        actor: Actor::Enclave,
+                        kind: AuditKind::SigningFailed,
+                        request_id: Some(request_id),
+                        wallet_id: Some(wallet_id),
+                        details: json!({ "error": e.to_string() }),
+                    })
+                    .await?;
+                Err(ServiceError::Enclave(e))
+            }
+        }
+    }
+
+    async fn fetch_shares(
+        &self,
+        wallet: &WalletRecord,
+        threshold: u8,
+    ) -> Result<Vec<StoredShare>, ServiceError> {
+        // List, then fetch the first `threshold` shares (deterministic
+        // order: sorted by index).
+        let ids = self.shares.list(&wallet.wallet_id).await?;
+        if ids.len() < threshold as usize {
+            return Err(ServiceError::InsufficientShares(format!(
+                "have {} shares, need {}",
+                ids.len(),
+                threshold
+            )));
+        }
+        let mut out = Vec::with_capacity(threshold as usize);
+        for id in ids.iter().take(threshold as usize) {
+            out.push(self.shares.get(id).await?);
+        }
+        Ok(out)
+    }
+
+    /// Submit an approval into the quorum subsystem.
+    ///
+    /// M1 placeholder: tests using `MockQuorumApprover` go through its
+    /// concrete `submit()` because the trait surface doesn't expose
+    /// `submit` (it's a backend implementation detail). When M4 lands the
+    /// HTTP approver API, this method will route to the trait once we
+    /// extend `QuorumApprover` with a submission verb.
+    ///
+    /// # Errors
+    ///
+    /// None in M1; reserved for future routing failures.
+    #[allow(clippy::unused_async, clippy::unnecessary_wraps)]
+    pub async fn record_approval(&self, _approval: SignedApproval) -> Result<(), ServiceError> {
+        Ok(())
+    }
+}
+
+fn canonical_message_bytes(payload: &SigningPayload) -> Vec<u8> {
+    match payload {
+        SigningPayload::Raw { bytes } | SigningPayload::PersonalSign { bytes } => bytes.clone(),
+        SigningPayload::TypedData { json } => serde_json::to_vec(json).unwrap_or_default(),
+        SigningPayload::VmTransaction { raw, .. } => raw.clone(),
+    }
+}
+
+fn requester_to_actor(req: &qfc_policy::Requester) -> Actor {
+    Actor::Requester {
+        id: qfc_policy::StaticAllowDenyPolicy::requester_key(req),
+    }
+}
+
+fn current_unix_ms() -> i64 {
+    let nanos = time::OffsetDateTime::now_utc().unix_timestamp_nanos();
+    i64::try_from(nanos / 1_000_000).unwrap_or(i64::MAX)
+}
+
+fn sha256_32(bytes: &[u8]) -> [u8; 32] {
+    let mut h = Sha256::new();
+    h.update(bytes);
+    h.finalize().into()
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    use std::fmt::Write;
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        let _ = write!(s, "{b:02x}");
+    }
+    s
+}

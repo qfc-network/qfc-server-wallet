@@ -19,18 +19,26 @@ name = "qfc-server-wallet"
 path = "src/main.rs"
 
 [dependencies]
+qfc-wallet-types = { path = "../qfc-wallet-types", version = "0.0.0" }
 qfc-enclave = { path = "../qfc-enclave", version = "0.0.0" }
 qfc-sss = { path = "../qfc-sss", version = "0.0.0" }
 qfc-policy = { path = "../qfc-policy", version = "0.0.0" }
 qfc-quorum = { path = "../qfc-quorum", version = "0.0.0" }
 qfc-audit = { path = "../qfc-audit", version = "0.0.0" }
 
-tokio.workspace = true
+tokio = { workspace = true, features = ["sync", "rt-multi-thread", "macros"] }
 async-trait.workspace = true
 thiserror.workspace = true
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-ulid.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+time.workspace = true
+sha2.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+ed25519-dalek.workspace = true
+time.workspace = true
