@@ -54,6 +54,9 @@ sha2 = "0.10"
 sha3 = "0.10"
 hmac = "0.12"
 
+# Symmetric AEAD (LocalFsShareStore at-rest encryption)
+chacha20poly1305 = { version = "0.10", features = ["std"] }
+
 # HD wallets
 bip32 = { version = "0.5", features = ["secp256k1", "mnemonic"] }
 bip39 = "2.0"

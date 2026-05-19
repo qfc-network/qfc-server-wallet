@@ -3,7 +3,7 @@
 //!
 //! Status:
 //! - M1: byte-secret Shamir split / combine via `vsss-rs` (P2);
-//!   `ShareStore` trait + `MockShareStore` / `LocalFsShareStore` land in P3.
+//!   `ShareStore` trait + `MockShareStore` / `LocalFsShareStore` (P3).
 //! - M3: `S3KmsShareStore` with attestation-conditional KMS decrypt.
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
@@ -12,6 +12,10 @@
 
 pub mod error;
 pub mod shamir;
+pub mod store;
+pub mod stores;
 
 pub use error::ShareError;
 pub use shamir::{combine_shares, split_secret, ShamirParams, ShamirShare};
+pub use store::{ShareStore, StoreError, StoredShare};
+pub use stores::{LocalFsShareStore, MockShareStore};
