@@ -38,6 +38,9 @@ serde_bytes = "0.11"
 ulid = { version = "1.1", features = ["serde"] }
 time = { version = "0.3", features = ["serde", "formatting", "parsing"] }
 
+# Big-integer types (EVM U256, value-cap evaluation)
+primitive-types = { version = "0.12", default-features = false, features = ["serde"] }
+
 # Crypto — secret material handling
 zeroize = { version = "1.7", features = ["zeroize_derive"] }
 subtle = "2.5"
