@@ -11,7 +11,21 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
+qfc-wallet-types = { path = "../qfc-wallet-types", version = "0.0.0" }
+qfc-enclave = { path = "../qfc-enclave", version = "0.0.0" }
+
 async-trait.workspace = true
 thiserror.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 tracing.workspace = true
+time.workspace = true
+hex.workspace = true
+sha2.workspace = true
+
+# Approval-collection state + per-request notifications
+tokio = { workspace = true, features = ["sync", "rt", "time"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+ed25519-dalek.workspace = true

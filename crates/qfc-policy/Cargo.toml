@@ -11,8 +11,13 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
+qfc-wallet-types = { path = "../qfc-wallet-types", version = "0.0.0" }
+
 async-trait.workspace = true
 thiserror.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
