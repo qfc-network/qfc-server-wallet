@@ -1815,6 +1815,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8ca58f447f06ed17d5fc4043ce1b10dd205e060fb3ce5b979b8ed8e59ff3f79"
 
 [[package]]
+name = "memoffset"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "488016bfae457b036d996092f6cb448677611ce4449e970ceaf42695203f218a"
+dependencies = [
+ "autocfg",
+]
+
+[[package]]
 name = "metrics"
 version = "0.23.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1894,6 +1903,18 @@ dependencies = [
  "libc",
  "wasi",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "nix"
+version = "0.27.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2eb04e9c688eff1c89d72b407f168cf79bb9e867a9d3323ed6c01519eb9cc053"
+dependencies = [
+ "bitflags 2.11.1",
+ "cfg-if",
+ "libc",
+ "memoffset",
 ]
 
 [[package]]
@@ -2404,20 +2425,25 @@ dependencies = [
 name = "qfc-enclave"
 version = "0.0.0"
 dependencies = [
+ "alloy-rlp",
  "async-trait",
  "bip32",
  "bip39",
  "blake3",
  "ed25519-dalek",
+ "futures",
  "hex",
  "hmac",
  "k256",
+ "primitive-types",
  "proptest",
+ "qfc-policy",
  "qfc-sss",
  "qfc-wallet-types",
  "rand 0.8.6",
  "rand_core 0.6.4",
  "serde",
+ "serde_bytes",
  "serde_json",
  "sha2",
  "sha3",
@@ -2425,6 +2451,9 @@ dependencies = [
  "thiserror 1.0.69",
  "time",
  "tokio",
+ "tokio-stream",
+ "tokio-util",
+ "tokio-vsock",
  "tracing",
  "zeroize",
 ]
@@ -2440,6 +2469,7 @@ dependencies = [
  "proptest",
  "qfc-wallet-types",
  "serde",
+ "serde_bytes",
  "serde_json",
  "thiserror 1.0.69",
  "time",
@@ -2525,12 +2555,14 @@ dependencies = [
  "rand 0.8.6",
  "rand_core 0.6.4",
  "serde",
+ "serde_bytes",
  "serde_json",
  "tempfile",
  "thiserror 1.0.69",
  "time",
  "tokio",
  "tracing",
+ "ulid",
  "vsss-rs",
  "zeroize",
 ]
@@ -3158,6 +3190,16 @@ checksum = "9a8e94ea7f378bd32cbbd37198a4a91436180c5bb472411e48b5ec2e2124ae9e"
 dependencies = [
  "serde_core",
  "serde_derive",
+]
+
+[[package]]
+name = "serde_bytes"
+version = "0.11.19"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a5d440709e79d88e51ac01c4b72fc6cb7314017bb7da9eeff678aa94c10e3ea8"
+dependencies = [
+ "serde",
+ "serde_core",
 ]
 
 [[package]]
@@ -3955,6 +3997,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "tokio-vsock"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2e336ac4b36df625d5429a735dd5847732fe5f62010e3ce0c50f3705d44730f8"
+dependencies = [
+ "bytes",
+ "futures",
+ "libc",
+ "tokio",
+ "vsock",
+]
+
+[[package]]
 name = "toml_datetime"
 version = "1.1.1+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4349,6 +4404,16 @@ name = "version_check"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
+
+[[package]]
+name = "vsock"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2dfb6e7a74830912f1f4a7655227c9ded1ea4e9136676311fedf54bedb412f35"
+dependencies = [
+ "libc",
+ "nix",
+]
 
 [[package]]
 name = "vsss-rs"

@@ -23,6 +23,25 @@ pub struct WalletConfig {
     pub total: u8,
     /// Policy version the wallet evaluates under.
     pub policy_id: PolicyId,
+    /// M3 — Hybrid scheme hard ceilings (RFC §2.1 decision #2).
+    ///
+    /// These are the enclave-side re-verified ceilings. Even if a
+    /// compromised policy service issued an Allow with a too-large `value`,
+    /// the enclave's hybrid verifier refuses to sign once the value
+    /// exceeds `max_value_per_tx`.
+    ///
+    /// `None` means no ceiling is enforced. M3 ships them defaulting to
+    /// `None` / empty so M1 / M2 callers still compile.
+    #[serde(default)]
+    pub max_value_per_tx: Option<u128>,
+    /// EVM-style 20-byte contract addresses the wallet may sign for. Empty
+    /// vec means "no constraint" (any target). For non-EVM wallets this
+    /// stays empty. Hex-encoded on the wire via the type alias.
+    #[serde(default)]
+    pub contract_allowlist: Vec<[u8; 20]>,
+    /// Chain IDs the wallet may sign for. Empty vec means "no constraint".
+    #[serde(default)]
+    pub chain_allowlist: Vec<u64>,
 }
 
 /// Status of a wallet in the orchestrator's registry.

@@ -18,8 +18,11 @@
 //! optional fields, not changes to the existing ones.
 
 use async_trait::async_trait;
+use qfc_policy::SignedPolicyDecision;
 use qfc_sss::ShamirShare;
-use qfc_wallet_types::{HashAlg, HdPath, RequestId, SigningScheme, WalletId};
+use qfc_wallet_types::{
+    ApprovalId, HashAlg, HdPath, RequestId, SigningScheme, WalletId,
+};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -70,6 +73,17 @@ pub enum EnclaveError {
     /// Caller's request does not match an internal invariant.
     #[error("invalid request: {0}")]
     InvalidRequest(&'static str),
+
+    /// Hybrid policy verification failed (RFC §2.1). The enclave will not
+    /// sign — fail-closed. See `hybrid_verifier::HybridVerifyError` for the
+    /// specific reason.
+    #[error("hybrid policy verification failed: {0}")]
+    HybridVerification(#[from] crate::hybrid_verifier::HybridVerifyError),
+
+    /// Functionality the backend cannot perform (e.g. real NSM attestation
+    /// when the `nitro` feature is not enabled).
+    #[error("not implemented: {0}")]
+    NotImplemented(&'static str),
 }
 
 /// Free-form signing context bound by the attestation.
@@ -87,6 +101,47 @@ pub struct SigningContext {
     /// Open extension space; the enclave canonically serializes this as
     /// JSON and includes it in `user_data` for the attestation.
     pub extra: serde_json::Value,
+}
+
+/// Decision tag on an `EnclaveApproval`. Mirrors `qfc_quorum::ApprovalDecision`
+/// — kept here to avoid a cyclic dep between `qfc-enclave` and `qfc-quorum`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EnclaveApprovalDecision {
+    /// The approver authorised the operation.
+    Approve,
+    /// The approver vetoed the operation.
+    Reject,
+}
+
+/// Approval payload visible to the enclave-side hybrid verifier.
+///
+/// Mirrors `qfc_quorum::SignedApproval` field-for-field. We carry an
+/// in-crate copy so `qfc-enclave` does not need to depend on `qfc-quorum`
+/// (which depends on `qfc-enclave` already — see D15). The orchestrator
+/// converts via the `From<qfc_quorum::SignedApproval>` impl in
+/// `qfc-server-wallet`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EnclaveApproval {
+    /// Stable identifier for the approval action.
+    pub approval_id: ApprovalId,
+    /// Approver's public key — used by the hybrid verifier to recover the
+    /// signer.
+    #[serde(with = "serde_bytes")]
+    pub approver_public_key: Vec<u8>,
+    /// Approver's curve.
+    pub approver_scheme: SigningScheme,
+    /// Request being approved.
+    pub request_id: RequestId,
+    /// SHA-256 of the message the signing wallet would sign.
+    pub message_hash: [u8; 32],
+    /// Approve / Reject.
+    pub decision: EnclaveApprovalDecision,
+    /// Unix-millisecond timestamp at which the approver signed.
+    pub timestamp_unix_ms: i64,
+    /// Approver's signature over the canonical preimage.
+    #[serde(with = "serde_bytes")]
+    pub signature: Vec<u8>,
 }
 
 /// Input to `Enclave::sign_in_enclave`.
@@ -109,6 +164,24 @@ pub struct EnclaveSignRequest {
     pub hash_alg: HashAlg,
     /// Arbitrary context to bind into the attestation.
     pub context: SigningContext,
+
+    // ------------------------------------------------------------------
+    // M3 — Hybrid policy verification (RFC §2.1 decision #2).
+    //
+    // `policy_decision` is `Option<_>` so M1/M2 callers still compile (the
+    // orchestrator started threading the policy decision in M2 P3, but the
+    // signed wrapper / enclave-side re-check is M3 new). If a backend has a
+    // pinned policy-service public key, `None` is treated as "no signed
+    // decision available" and the verifier fails-closed (configurable).
+    //
+    // `approvals` defaults to empty — pass it when the policy decision was
+    // `RequireQuorum`. The hybrid verifier counts approvals and re-verifies
+    // each signature against `approver_public_key`.
+    // ------------------------------------------------------------------
+    /// Signed policy decision authorising the operation.
+    pub policy_decision: Option<SignedPolicyDecision>,
+    /// Quorum approvals collected upstream (in-enclave re-verified).
+    pub approvals: Vec<EnclaveApproval>,
 }
 
 /// Output of `Enclave::sign_in_enclave`.

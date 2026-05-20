@@ -162,6 +162,9 @@ async fn quorum_collect_threshold_unblocks_sign() {
                 threshold: 2,
                 total: 3,
                 policy_id: qfc_wallet_types::PolicyId::new(),
+                max_value_per_tx: None,
+                contract_allowlist: Vec::new(),
+                chain_allowlist: Vec::new(),
             },
             qfc_audit::Actor::System,
         )
@@ -356,6 +359,9 @@ async fn quorum_collect_times_out_when_no_approvals() {
                 threshold: 2,
                 total: 3,
                 policy_id: qfc_wallet_types::PolicyId::new(),
+                max_value_per_tx: None,
+                contract_allowlist: Vec::new(),
+                chain_allowlist: Vec::new(),
             },
             qfc_audit::Actor::System,
         )

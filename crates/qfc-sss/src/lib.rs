@@ -18,4 +18,7 @@ pub mod stores;
 pub use error::ShareError;
 pub use shamir::{combine_shares, split_secret, ShamirParams, ShamirShare};
 pub use store::{ShareStore, StoreError, StoredShare};
-pub use stores::{LocalFsShareStore, MockShareStore};
+pub use stores::{
+    AttestationPredicate, DataKeyMaterial, KmsClient, LocalFsShareStore, MockKmsClient,
+    MockS3Client, MockShareStore, S3Envelope, S3KmsShareStore, S3Like,
+};

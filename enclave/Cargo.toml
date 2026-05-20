@@ -1,0 +1,76 @@
+# Empty workspace section so this crate is treated as its own workspace —
+# separate from the host's. Required because parent worktrees have
+# workspace manifests above us; the explicit empty table tells Cargo to
+# stop looking upward.
+[workspace]
+
+[package]
+name = "qfc-enclave-boot"
+description = "In-EIF boot binary for the QFC server wallet's Nitro Enclave."
+version = "0.0.0"
+edition = "2021"
+authors = ["QFC Network <maintainers@qfc.network>"]
+license = "Apache-2.0"
+repository = "https://github.com/qfc-network/qfc-server-wallet"
+homepage = "https://qfc.network"
+rust-version = "1.88"
+publish = false
+
+# This binary lives outside the workspace on purpose: the workspace's `cargo
+# test` should not have to build the enclave's smaller dep tree, and the
+# enclave's reproducible build must pin its OWN Cargo.lock distinct from the
+# host workspace's. See top-level Cargo.toml `exclude = ["enclave"]`.
+
+[[bin]]
+name = "qfc-enclave-boot"
+path = "src/main.rs"
+
+[dependencies]
+qfc-wallet-types = { path = "../crates/qfc-wallet-types", version = "0.0.0" }
+qfc-sss = { path = "../crates/qfc-sss", version = "0.0.0" }
+qfc-enclave = { path = "../crates/qfc-enclave", version = "0.0.0" }
+qfc-policy = { path = "../crates/qfc-policy", version = "0.0.0" }
+
+tokio = { version = "1.40", features = ["macros", "rt-multi-thread", "sync", "time", "io-util", "net"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_bytes = "0.11"
+async-trait = "0.1"
+anyhow = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+ed25519-dalek = { version = "2.1", features = ["rand_core"] }
+sha2 = "0.10"
+rand = "0.8"
+hex = "0.4"
+futures = { version = "0.3", optional = true }
+time = { version = "0.3", features = ["std"] }
+
+# Inside-EIF only — real NSM bindings. The skeleton ships without the
+# `nitro` feature so this binary compiles on macOS/Linux dev for tests.
+# Building for the actual Nitro target enables the feature.
+[features]
+nitro = ["dep:aws-nitro-enclaves-nsm-api", "dep:tokio-vsock", "dep:tokio-util", "futures"]
+
+[dependencies.aws-nitro-enclaves-nsm-api]
+version = "0.4"
+optional = true
+
+[dependencies.tokio-vsock]
+version = "0.5"
+optional = true
+
+[dependencies.tokio-util]
+version = "0.7"
+features = ["codec"]
+optional = true
+
+[dev-dependencies]
+tempfile = "3.10"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = "symbols"

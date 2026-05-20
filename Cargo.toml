@@ -9,6 +9,12 @@ members = [
     "crates/qfc-audit",
     "crates/qfc-wallet-types",
 ]
+# The `enclave/` directory holds the in-EIF boot binary. It's a SEPARATE
+# Cargo target — its dependency graph is intentionally smaller and it
+# builds in the Nitro EIF container, not the host workspace. Excluding it
+# keeps the workspace-level `cargo test` fast and keeps the enclave's
+# Cargo.lock independent from the host's.
+exclude = ["enclave"]
 
 [workspace.package]
 version = "0.0.0"

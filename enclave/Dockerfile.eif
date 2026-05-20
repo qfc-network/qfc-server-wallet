@@ -1,0 +1,78 @@
+# syntax=docker/dockerfile:1
+#
+# Reproducible-build Dockerfile for the QFC server wallet's in-enclave
+# boot binary.
+#
+# This Dockerfile produces the **boot binary** (`/out/qfc-enclave-boot`).
+# The final EIF (Enclave Image File) is assembled by AWS's `nitro-cli
+# build-enclave` and requires an AWS Nitro-enabled instance. Running
+# `nitro-cli` is OUT OF SCOPE for this Dockerfile because the host
+# Dockerfile runs anywhere (including macOS dev); see `enclave/Makefile`
+# `make eif` for the assembly step.
+#
+# Reproducibility:
+#   - Base image pinned by @sha256 digest (`alpine:3.20`).
+#   - `rust-toolchain.toml` pins exact rustc / cargo version.
+#   - `SOURCE_DATE_EPOCH` set explicitly so timestamps in the binary are
+#     stable.
+#   - `--frozen` against `Cargo.lock` so no version drift.
+#   - Three-stage planner→builder→runtime split via cargo-chef so the
+#     dependency layer is independently cacheable AND deterministic.
+#
+# Verification:
+#   The PCR0 hash of the resulting EIF is the only thing a third party
+#   needs to verify the build. `make verify` produces a second independent
+#   build inside a fresh container and diffs PCR0 against the published
+#   value.
+
+# ---- Stage 1: planner ----------------------------------------------------
+# Produces `recipe.json` that captures the resolved dep graph. This is
+# independent of the source, so the dep cache only invalidates when
+# `Cargo.toml` / `Cargo.lock` changes.
+FROM rust:1.88-alpine3.20@sha256:0000000000000000000000000000000000000000000000000000000000000000 AS planner
+WORKDIR /build
+RUN apk add --no-cache musl-dev openssl-dev pkgconf
+RUN cargo install --version 0.1.68 cargo-chef
+COPY ./Cargo.toml ./Cargo.lock ./
+COPY ../crates ../crates
+COPY ./src ./src
+RUN cargo chef prepare --recipe-path recipe.json
+
+# ---- Stage 2: builder ----------------------------------------------------
+FROM rust:1.88-alpine3.20@sha256:0000000000000000000000000000000000000000000000000000000000000000 AS builder
+ENV SOURCE_DATE_EPOCH=1700000000
+ENV CARGO_NET_OFFLINE=false
+ENV RUSTFLAGS="-C target-feature=+crt-static"
+WORKDIR /build
+RUN apk add --no-cache musl-dev openssl-dev pkgconf
+RUN cargo install --version 0.1.68 cargo-chef
+COPY --from=planner /build/recipe.json recipe.json
+# Build dependencies — cached independently of source changes.
+RUN cargo chef cook --release --recipe-path recipe.json
+COPY ./Cargo.toml ./Cargo.lock ./
+COPY ../crates ../crates
+COPY ./src ./src
+# Bind-build the actual binary against the cached deps.
+RUN cargo build --release --frozen --locked --bin qfc-enclave-boot
+
+# ---- Stage 3: runtime ----------------------------------------------------
+# Bare-minimum filesystem the EIF will package. `nitro-cli` will wrap this
+# layer with the Nitro kernel + ramfs to form the final `.eif`.
+FROM scratch AS runtime
+COPY --from=builder /build/target/release/qfc-enclave-boot /boot.bin
+ENTRYPOINT ["/boot.bin"]
+
+# ---- Notes ---------------------------------------------------------------
+#
+# The base-image SHA digests above are placeholders (000…) — they are
+# pinned for real in the M3-GA PR after we settle on the Alpine version
+# the audit vendor signs off on. Until then `make boot` will fail to
+# pull the image; that is intentional, the M3 SKELETON ships compile-time
+# infrastructure, not a runnable build.
+#
+# To actually build the EIF (requires AWS Nitro-enabled host + `nitro-cli`):
+#     docker build -t qfc-enclave-boot -f enclave/Dockerfile.eif .
+#     nitro-cli build-enclave --docker-uri qfc-enclave-boot:latest \
+#                             --output-file qfc-server-wallet.eif
+#     nitro-cli describe-eif --eif-path qfc-server-wallet.eif
+# The reported PCR0/PCR1/PCR2 are what the host's KMS policy gates on.
