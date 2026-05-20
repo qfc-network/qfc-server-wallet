@@ -72,6 +72,9 @@ hex = "0.4"
 bs58 = "0.5"
 base64 = "0.22"
 
+# EVM / RLP
+alloy-rlp = "0.3"
+
 # Tracing & metrics
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }

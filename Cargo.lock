@@ -22,6 +22,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "alloy-rlp"
+version = "0.3.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dc90b1e703d3c03f4ff7f48e82dd0bc1c8211ab7d079cd836a06fcfeb06651cb"
+dependencies = [
+ "arrayvec",
+ "bytes",
+]
+
+[[package]]
 name = "anyhow"
 version = "1.0.102"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -996,6 +1006,7 @@ dependencies = [
 name = "qfc-policy"
 version = "0.0.0"
 dependencies = [
+ "alloy-rlp",
  "async-trait",
  "hex",
  "primitive-types",
