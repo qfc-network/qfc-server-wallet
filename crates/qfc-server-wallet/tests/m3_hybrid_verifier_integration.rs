@@ -76,13 +76,8 @@ fn enclave_approval_preimage_matches_qfc_quorum_signing_preimage() {
         approver_set: ApproverSetId::new(),
         rationale: Vec::<RuleHit>::new(),
     };
-    let preimage = SignedPolicyDecision::build_preimage(
-        &decision,
-        &request_id,
-        &wallet_id,
-        signed_at,
-        60,
-    );
+    let preimage =
+        SignedPolicyDecision::build_preimage(&decision, &request_id, &wallet_id, signed_at, 60);
     let pol_sig = policy_sk.sign(&preimage).to_bytes().to_vec();
     let signed = SignedPolicyDecision {
         decision,
@@ -150,9 +145,7 @@ fn deny_decision_blocks_signing_via_verifier() {
     let sr = SigningRequest {
         request_id,
         wallet_id,
-        requester: qfc_policy::Requester::ApiKey {
-            key_id: "t".into(),
-        },
+        requester: qfc_policy::Requester::ApiKey { key_id: "t".into() },
         payload: SigningPayload::Raw {
             bytes: b"x".to_vec(),
         },

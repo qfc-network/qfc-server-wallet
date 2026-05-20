@@ -17,9 +17,8 @@ pub mod postgres;
 pub mod sink;
 
 pub use anchor::{
-    anchor_payload, anchor_preimage, daily_anchor_commit_job,
-    daily_anchor_commit_job_with_reader, AnchorJsonl, AnchorPayload, LocalFileAnchor,
-    DEFAULT_ANCHOR_INTERVAL,
+    anchor_payload, anchor_preimage, daily_anchor_commit_job, daily_anchor_commit_job_with_reader,
+    AnchorJsonl, AnchorPayload, LocalFileAnchor, DEFAULT_ANCHOR_INTERVAL,
 };
 pub use event::{Actor, AuditEvent, AuditKind};
 pub use file::{replay_verify, verify_event, FileAuditSink};

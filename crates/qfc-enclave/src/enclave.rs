@@ -20,9 +20,7 @@
 use async_trait::async_trait;
 use qfc_policy::SignedPolicyDecision;
 use qfc_sss::ShamirShare;
-use qfc_wallet_types::{
-    ApprovalId, HashAlg, HdPath, RequestId, SigningScheme, WalletId,
-};
+use qfc_wallet_types::{ApprovalId, HashAlg, HdPath, RequestId, SigningScheme, WalletId};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 

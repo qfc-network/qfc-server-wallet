@@ -41,8 +41,8 @@ use qfc_wallet_types::{RequestId, SigningScheme, WalletId};
 use thiserror::Error;
 
 use crate::enclave::{EnclaveApproval, EnclaveApprovalDecision};
-use crate::signer::dispatch_signer;
 use crate::error::SignerError;
+use crate::signer::dispatch_signer;
 
 /// Projection of `WalletRecord` carrying only the M3 hard ceilings.
 ///
@@ -294,7 +294,10 @@ impl HybridVerifier {
         }
         // 2a. Domain-separation prefix is present (defense in depth — the
         //     canonical preimage must always include it).
-        if !signed.raw_payload.starts_with(POLICY_DECISION_DOMAIN.as_bytes()) {
+        if !signed
+            .raw_payload
+            .starts_with(POLICY_DECISION_DOMAIN.as_bytes())
+        {
             return Err(HybridVerifyError::PolicyDecisionRawPayloadMismatch);
         }
 
@@ -402,9 +405,7 @@ impl HybridVerifier {
             } = &request.payload
             {
                 let decoded = qfc_policy::decode_evm_tx(raw).map_err(|_| {
-                    HybridVerifyError::InvalidApproval(
-                        "could not decode EVM tx for ceiling check",
-                    )
+                    HybridVerifyError::InvalidApproval("could not decode EVM tx for ceiling check")
                 })?;
                 if decoded.value > U256::from(cap) {
                     return Err(HybridVerifyError::ValueCapExceeded {
@@ -454,9 +455,7 @@ impl HybridVerifier {
             }
             // Reject explicit rejects.
             if ap.decision == EnclaveApprovalDecision::Reject {
-                return Err(HybridVerifyError::InvalidApproval(
-                    "approver rejected",
-                ));
+                return Err(HybridVerifyError::InvalidApproval("approver rejected"));
             }
             // Verify the curve signature.
             let preimage = approval_preimage(ap);
@@ -660,8 +659,7 @@ mod tests {
         let signing_request_id = RequestId::new();
         let signed_request_id = RequestId::new();
         let w = WalletId::new();
-        let sd =
-            build_signed_decision(allow(DecisionId::new()), signed_request_id, w, now, 60);
+        let sd = build_signed_decision(allow(DecisionId::new()), signed_request_id, w, now, 60);
         let err = v.verify(
             Some(&sd),
             &[],
@@ -782,7 +780,10 @@ mod tests {
         let mut c = ceilings(w);
         c.contract_allowlist = vec![[0x99u8; 20]]; // not 0x22
         let err = v.verify(Some(&sd), &[], &sr, &c, now);
-        assert!(matches!(err, Err(HybridVerifyError::TargetNotAllowed { .. })));
+        assert!(matches!(
+            err,
+            Err(HybridVerifyError::TargetNotAllowed { .. })
+        ));
     }
 
     #[test]
@@ -802,7 +803,10 @@ mod tests {
         let mut c = ceilings(w);
         c.chain_allowlist = vec![1, 137]; // 42 not on it
         let err = v.verify(Some(&sd), &[], &sr, &c, now);
-        assert!(matches!(err, Err(HybridVerifyError::ChainNotAllowed { .. })));
+        assert!(matches!(
+            err,
+            Err(HybridVerifyError::ChainNotAllowed { .. })
+        ));
     }
 
     #[test]
@@ -924,16 +928,14 @@ mod tests {
         let sd = build_signed_decision(allow(DecisionId::new()), r, w, now, 60);
         let approvals: Vec<_> = (0..(MAX_APPROVALS + 1))
             .map(|i| {
-                build_test_approval(
-                    r,
-                    b"msg",
-                    now,
-                    &[u8::try_from(i & 0xFF).unwrap_or(1); 32],
-                )
+                build_test_approval(r, b"msg", now, &[u8::try_from(i & 0xFF).unwrap_or(1); 32])
             })
             .collect();
         let err = v.verify(Some(&sd), &approvals, &req(r, w), &ceilings(w), now);
-        assert!(matches!(err, Err(HybridVerifyError::TooManyApprovals { .. })));
+        assert!(matches!(
+            err,
+            Err(HybridVerifyError::TooManyApprovals { .. })
+        ));
     }
 
     #[test]
@@ -969,8 +971,7 @@ mod tests {
         let decision = EnclaveApprovalDecision::Approve;
 
         // Build the exact preimage the verifier expects.
-        let mut preimage_buf =
-            Vec::with_capacity(26 + 26 + 32 + 1 + 8);
+        let mut preimage_buf = Vec::with_capacity(26 + 26 + 32 + 1 + 8);
         preimage_buf.extend_from_slice(approval_id.to_string().as_bytes());
         preimage_buf.push(b'|');
         preimage_buf.extend_from_slice(request_id.to_string().as_bytes());
