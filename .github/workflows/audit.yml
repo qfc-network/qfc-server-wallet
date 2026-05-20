@@ -16,12 +16,18 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo install cargo-audit --locked
-      # Ignored advisories mirror `deny.toml` — testcontainers dev-dep chain
-      # (RUSTSEC-2025-0111 tokio-tar, RUSTSEC-2025-0134 rustls-pemfile) and
-      # utoipa-swagger-ui build-time syn-1 chain (RUSTSEC-2024-0370). None of
-      # these are linked into production binaries.
+      # Ignored advisories — none of these crates ship in the production
+      # binary; they ride dev-dep or build-time chains:
+      #   * RUSTSEC-2025-0111 — tokio-tar (testcontainers dev-dep chain)
+      #   * RUSTSEC-2025-0134 — rustls-pemfile unmaintained (testcontainers)
+      #   * RUSTSEC-2024-0370 — syn 1 (utoipa-swagger-ui build-time macros)
+      #   * RUSTSEC-2023-0071 — rsa Marvin attack: pulled in by sqlx-macros-core
+      #     for compile-time query verification across all DB backends. We
+      #     only use Postgres at runtime; sqlx-mysql does not link in. Revisit
+      #     when sqlx 0.9 lands (which scopes the build chain by backend).
       - run: |
           cargo audit --deny warnings \
             --ignore RUSTSEC-2025-0111 \
             --ignore RUSTSEC-2025-0134 \
-            --ignore RUSTSEC-2024-0370
+            --ignore RUSTSEC-2024-0370 \
+            --ignore RUSTSEC-2023-0071
