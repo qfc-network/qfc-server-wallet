@@ -27,9 +27,16 @@ ed25519-dalek.workspace = true
 zeroize.workspace = true
 rand.workspace = true
 
-# Async file IO + per-sink lock
-tokio = { workspace = true, features = ["sync", "fs", "io-util", "rt"] }
+# Async file IO + per-sink lock + spawn for the anchor job
+tokio = { workspace = true, features = ["sync", "fs", "io-util", "rt", "macros", "time"] }
+
+# Postgres backend (M2 P2)
+sqlx = { workspace = true }
+chrono = { workspace = true }
 
 [dev-dependencies]
 tempfile.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+testcontainers.workspace = true
+testcontainers-modules.workspace = true
+futures.workspace = true

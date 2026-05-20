@@ -40,6 +40,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - 6 E2E integration tests covering: ed25519 create-then-sign-then-external-verify, secp256k1 create-then-sign-then-external-verify, policy-deny blocks signing, full-flow audit-replay (13 chained events verify), unknown-wallet returns `NotFound`, quorum approval round-trip.
   - 124 tests passing across the workspace.
 - **`docs/m1-decisions.md`**: persistent record of the 20 non-obvious decisions made during M1 (crate layout, SSS chunk size, recoverable-`v` cross-check, fail-closed mock enclave, audit chain construction, etc.).
+- **M2 P2**: Postgres-backed audit sink + anchor-commit stub.
+  - `qfc-audit::PostgresAuditSink`: sqlx 0.8 backend implementing the same `AuditSink` trait shape as `FileAuditSink`. Chain integrity under concurrent emit is enforced by a transaction-level Postgres advisory lock (`pg_advisory_xact_lock`) keyed on the deterministic constant `0x7146_4353_5343_484E` (ASCII `qFCSSCHN`) so all processes sharing one database serialise their chain-head updates without coordinating.
+  - Schema: single `audit_events` table keyed by ULID `event_id`, with `prev_event_hash BYTEA`, `kind SMALLINT` (stable `AuditKind::kind_byte` per M1 D13), JSONB `details`, 64-byte `server_signature`, partial indexes on `wallet_id` / `request_id`, and a full index on `timestamp_unix_ms`. Embedded via `sqlx::migrate!("./migrations")`.
+  - `replay_verify_postgres(pool, pubkey)` mirrors the file backend's `replay_verify` over Postgres rows; tampering, signature mismatch, or chain breakage all return `AuditError::Crypto`.
+  - `qfc-audit::anchor`: `anchor_payload(pool)` reads the current chain head as `SHA256(preimage ‖ signature)` (M1 D12) plus `{date_utc, head_event_id, event_count}`; `daily_anchor_commit_job(pool, interval, submit)` spawns a tokio interval task that invokes a user-supplied async submit callback. M2 stops at the read side — M3 wires the submitter to qfc-core for on-chain anchoring.
+  - 5 integration tests (`crates/qfc-audit/tests/postgres_integration.rs`) using `testcontainers` 0.23 + the Postgres module: emit-fetch chain links, 16-way concurrent emit chain integrity, replay-verify equivalence, wrong-key rejection, anchor-payload latest-head. Gated `#[ignore]` so the default `cargo test` run stays Docker-free; run with `cargo test --workspace -- --ignored` to exercise.
+  - `deny.toml`: allow `CDLA-Permissive-2.0` (webpki-roots, permissive); ignore `RUSTSEC-2025-0111` (tokio-tar) and `RUSTSEC-2025-0134` (rustls-pemfile) — both are dev-dependency-only via `testcontainers → bollard` and never link into production binaries.
 
 ## [0.0.0] — 2026-05-19
 
