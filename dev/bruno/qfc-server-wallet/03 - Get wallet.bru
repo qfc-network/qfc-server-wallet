@@ -1,0 +1,21 @@
+meta {
+  name: 03 - Get wallet
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{baseUrl}}/wallets/{{walletId}}
+  body: none
+  auth: none
+}
+
+headers {
+  Accept: application/json
+  X-API-Key: {{apiKey}}
+}
+
+assert {
+  res.status: eq 200
+  res.body.wallet_id: eq {{walletId}}
+}

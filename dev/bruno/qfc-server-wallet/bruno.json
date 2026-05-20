@@ -1,0 +1,9 @@
+{
+  "version": "1",
+  "name": "qfc-server-wallet",
+  "type": "collection",
+  "ignore": [
+    "node_modules",
+    ".git"
+  ]
+}

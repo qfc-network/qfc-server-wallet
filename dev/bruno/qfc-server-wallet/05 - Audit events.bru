@@ -1,0 +1,26 @@
+meta {
+  name: 05 - Audit events
+  type: http
+  seq: 5
+}
+
+get {
+  url: {{baseUrl}}/audit/events?wallet_id={{walletId}}&limit=20
+  body: none
+  auth: none
+}
+
+params:query {
+  wallet_id: {{walletId}}
+  limit: 20
+}
+
+headers {
+  Accept: application/json
+  X-API-Key: {{apiKey}}
+}
+
+assert {
+  res.status: eq 200
+  res.body.events: isArray
+}

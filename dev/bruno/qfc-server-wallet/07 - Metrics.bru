@@ -1,0 +1,24 @@
+meta {
+  name: 07 - Metrics
+  type: http
+  seq: 7
+}
+
+get {
+  url: {{metricsUrl}}/metrics
+  body: none
+  auth: none
+}
+
+headers {
+  Accept: text/plain
+}
+
+# Note: the metrics endpoint lives on port 9090, NOT 8080 — see
+# environments/local.bru where `metricsUrl` is set separately.
+# This endpoint is unauthenticated (Prometheus scrape convention) and
+# returns text/plain in the Prometheus exposition format.
+
+assert {
+  res.status: eq 200
+}

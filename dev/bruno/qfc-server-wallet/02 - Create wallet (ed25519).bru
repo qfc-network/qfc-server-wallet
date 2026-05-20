@@ -1,0 +1,34 @@
+meta {
+  name: 02 - Create wallet (ed25519)
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrl}}/wallets
+  body: json
+  auth: none
+}
+
+headers {
+  Accept: application/json
+  Content-Type: application/json
+  X-API-Key: {{apiKey}}
+}
+
+body:json {
+  {
+    "scheme": "ed25519",
+    "label": "bruno-dev-wallet",
+    "policy_id": null
+  }
+}
+
+assert {
+  res.status: eq 201
+  res.body.wallet_id: isDefined
+}
+
+vars:post-response {
+  walletId: res.body.wallet_id
+}

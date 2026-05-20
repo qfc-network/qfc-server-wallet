@@ -1,0 +1,39 @@
+# Build artifacts — never copy local target/ into the build context
+target/
+**/target/
+
+# VCS
+.git/
+.github/
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS scratch
+.DS_Store
+Thumbs.db
+
+# Local Docker mounts that may appear during `docker compose up`
+deploy/grafana/data/
+deploy/postgres-data/
+deploy/mimir-data/
+
+# Coverage and profiling
+*.profraw
+*.profdata
+tarpaulin-report.html
+cobertura.xml
+lcov.info
+
+# Local policy overrides
+examples/policies/*.local.json
+policies/*.local.json
+
+# Claude worktrees + tooling state
+.claude/
+
+# Note: we intentionally do NOT ignore Cargo.lock — distroless binary builds
+# need the lockfile for reproducibility.
