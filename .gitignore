@@ -1,5 +1,9 @@
 # Rust
 /target/
+# The enclave/ Cargo project is a separate workspace and has its own
+# target directory; exclude it too. (Generic `target/` rule would also
+# work but the explicit form documents intent.)
+enclave/target/
 **/*.rs.bk
 *.pdb
 
@@ -24,8 +28,12 @@ Thumbs.db
 
 # Enclave build artifacts (M3+)
 enclave/build/
-enclave/*.eif
-enclave/*.pcr
+# Note: `Dockerfile.eif` is the build recipe and IS committed; only the
+# build outputs are ignored.
+enclave/build/*.eif
+enclave/build/*.pcr
+*.eif.out
+*.pcr.out
 
 # Local policy overrides (operators occasionally drop *.local.json files for testing)
 examples/policies/*.local.json
@@ -46,3 +54,4 @@ lcov.info
 *.key
 *.p12
 secrets/
+.claude/

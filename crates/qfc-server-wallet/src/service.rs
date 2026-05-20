@@ -464,6 +464,15 @@ impl WalletService {
             })
             .await?;
 
+        // M3 hybrid scheme additive fields. The orchestrator threads through:
+        //   - `policy_decision: None` for M3 skeleton; the in-enclave hybrid
+        //     verifier is exercised in unit tests directly. A future PR
+        //     introduces a dedicated `PolicyServiceSigner` that wraps
+        //     `decision` into a `SignedPolicyDecision` here.
+        //   - `approvals: Vec::new()` until M4 wires quorum →
+        //     `EnclaveApproval` conversion at this layer. The
+        //     `MockEnclave` ignores both; `NitroEnclave` (the boot binary)
+        //     enforces them.
         let resp = self
             .enclave
             .sign_in_enclave(EnclaveSignRequest {
@@ -475,6 +484,8 @@ impl WalletService {
                 message,
                 hash_alg,
                 context,
+                policy_decision: None,
+                approvals: Vec::new(),
             })
             .await;
 

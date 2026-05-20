@@ -334,6 +334,8 @@ mod tests {
                 message: b"hello qfc".to_vec(),
                 hash_alg: HashAlg::None,
                 context: SigningContext::default(),
+                policy_decision: None,
+                approvals: Vec::new(),
             })
             .await
             .unwrap();
@@ -382,6 +384,8 @@ mod tests {
                 message: b"sign me".to_vec(),
                 hash_alg: HashAlg::Keccak256,
                 context: SigningContext::default(),
+                policy_decision: None,
+                approvals: Vec::new(),
             })
             .await
             .unwrap();
@@ -422,6 +426,8 @@ mod tests {
                 message: b"x".to_vec(),
                 hash_alg: HashAlg::None,
                 context: SigningContext::default(),
+                policy_decision: None,
+                approvals: Vec::new(),
             })
             .await;
         assert!(matches!(
@@ -458,6 +464,8 @@ mod tests {
                 message: b"x".to_vec(),
                 hash_alg: HashAlg::None,
                 context: SigningContext::default(),
+                policy_decision: None,
+                approvals: Vec::new(),
             })
             .await;
         assert!(matches!(err, Err(EnclaveError::InconsistentShares(_))));
@@ -519,6 +527,8 @@ mod tests {
                 message: msg.clone(),
                 hash_alg: HashAlg::None,
                 context: SigningContext::default(),
+                policy_decision: None,
+                approvals: Vec::new(),
             })
             .await
             .unwrap();

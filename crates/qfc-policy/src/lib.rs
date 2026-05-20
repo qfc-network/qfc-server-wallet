@@ -11,6 +11,10 @@
 #![warn(missing_docs)]
 #![warn(clippy::pedantic)]
 #![allow(clippy::module_name_repetitions)]
+// M3's `SignedPolicyDecision` docs reference (decision || request_id ||
+// wallet_id || ...) byte-layout chains; quoting every identifier hurts
+// readability.
+#![allow(clippy::doc_markdown)]
 
 pub mod decision;
 pub mod decoders;
@@ -19,6 +23,7 @@ pub mod rate_limit;
 pub mod request;
 pub mod rule_set_policy;
 pub mod rules;
+pub mod signed_decision;
 pub mod static_policy;
 pub mod vm;
 
@@ -31,5 +36,6 @@ pub use rate_limit::{Clock, ManualClock, SystemClock, TokenBucketLimiter};
 pub use request::{Requester, SigningPayload, SigningRequest, VmType};
 pub use rule_set_policy::RuleSetPolicy;
 pub use rules::{QuorumTrigger, RateLimitScope, Rule, RuleSet, VmShapeConstraints};
+pub use signed_decision::{SignedPolicyDecision, POLICY_DECISION_DOMAIN};
 pub use static_policy::{AllowDefault, StaticAllowDenyPolicy};
 pub use vm::{DecodedTx, VmDecoder};

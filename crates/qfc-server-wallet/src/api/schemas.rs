@@ -235,6 +235,12 @@ impl CreateWalletRequest {
             threshold: self.threshold,
             total: self.total,
             policy_id,
+            // M3 hard ceilings: API surface still M2; populated via separate
+            // admin endpoints (or wallet-update flow) in a future PR. Default
+            // to no constraint so existing API callers see no behavior change.
+            max_value_per_tx: None,
+            contract_allowlist: Vec::new(),
+            chain_allowlist: Vec::new(),
         })
     }
 }

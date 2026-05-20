@@ -1,0 +1,13 @@
+# Pinned rust toolchain for the in-EIF boot binary.
+#
+# IMPORTANT: this is the toolchain version that ships INSIDE the
+# reproducible EIF. Bumping it changes PCR0 / PCR2 — every wallet pinned
+# to the old PCRs becomes unable to sign until its KMS policy is updated.
+# Treat as a coordinated upgrade.
+#
+# The host workspace's rust-toolchain.toml is independent (the host has
+# its own rebuild + audit cadence).
+[toolchain]
+channel = "1.88.0"
+components = ["rustfmt", "clippy", "rust-src"]
+profile = "minimal"

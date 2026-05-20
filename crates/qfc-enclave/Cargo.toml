@@ -13,11 +13,13 @@ publish = false
 [dependencies]
 qfc-wallet-types = { path = "../qfc-wallet-types", version = "0.0.0" }
 qfc-sss = { path = "../qfc-sss", version = "0.0.0" }
+qfc-policy = { path = "../qfc-policy", version = "0.0.0" }
 
 async-trait.workspace = true
 thiserror.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+serde_bytes.workspace = true
 zeroize.workspace = true
 subtle.workspace = true
 tracing.workspace = true
@@ -42,6 +44,33 @@ bip39.workspace = true
 hex.workspace = true
 rand.workspace = true
 rand_core.workspace = true
+primitive-types.workspace = true
+
+# EVM tx decoding for hybrid verifier ceiling check (re-decodes inside the
+# enclave so the verifier does not trust the host's pre-decoded `value`).
+alloy-rlp.workspace = true
+
+[features]
+# Real Nitro Enclaves backend (requires Linux + AWS Nitro-enabled host).
+# Off by default so non-Linux dev still compiles. See enclaves/nitro.rs.
+nitro = ["dep:tokio-vsock", "dep:tokio-util", "dep:futures", "dep:tokio-stream"]
+
+[dependencies.tokio-vsock]
+version = "0.5"
+optional = true
+
+[dependencies.tokio-util]
+version = "0.7"
+features = ["codec"]
+optional = true
+
+[dependencies.futures]
+workspace = true
+optional = true
+
+[dependencies.tokio-stream]
+version = "0.1"
+optional = true
 
 [dev-dependencies]
 proptest.workspace = true
