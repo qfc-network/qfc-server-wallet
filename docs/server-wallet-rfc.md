@@ -1,13 +1,14 @@
 # RFC: QFC Server Wallet (Privy-style TEE custody + M-of-N quorum)
 
-**Status:** v1.0 — accepted
+**Status:** v1.1 — accepted
 **Author:** Claude (drafted for Larry)
-**Date:** 2026-05-19 (v0.1) · 2026-05-19 (v1.0, decisions applied)
+**Date:** 2026-05-19 (v0.1) · 2026-05-19 (v1.0, decisions applied) · 2026-05-21 (v1.1, retro fold-back)
 **License of this doc:** Apache 2.0 (will live in public repo `qfc-server-wallet`)
 
 **Changelog**
 - v0.1 (2026-05-19) — initial draft, 11 open decisions in §10
 - v1.0 (2026-05-19) — decisions resolved by Larry; §10 rewritten as "Resolved decisions"; §9.6 rewritten with honest QVM/WASM ABI assessment from qfc-core code inspection; M5 scope adjusted accordingly; §12 "Repo bootstrap checklist" added
+- v1.1 (2026-05-21) — applied retro fold-backs after M1+M2 shipped (228 tests on main); see docs/retro-m1-m2.md
 
 ---
 
@@ -33,7 +34,7 @@ Out of scope:
 
 ### 1.1 New repo: `qfc-server-wallet` (public, Apache 2.0)
 
-Cargo workspace with six crates:
+Cargo workspace with seven crates (six external seams + one internal types crate; see §1.3):
 
 ```
 qfc-server-wallet/
@@ -44,7 +45,8 @@ qfc-server-wallet/
 │   ├── qfc-sss/                     # SSS wrapper + ShareStore trait + backends
 │   ├── qfc-policy/                  # Policy DSL + evaluator + EVM/QVM/WASM decoders
 │   ├── qfc-quorum/                  # M-of-N approver coordination
-│   └── qfc-audit/                   # AuditSink trait + Postgres/Kafka/file backends
+│   ├── qfc-audit/                   # AuditSink trait + Postgres/Kafka/file backends
+│   └── qfc-wallet-types/            # internal shared types (IDs, schemes, secret bytes) — breaks qfc-enclave↔qfc-sss dep cycle; see §1.3
 ├── enclave/
 │   ├── Dockerfile.eif               # reproducible Nitro EIF build
 │   ├── boot.rs                      # in-enclave binary entrypoint
@@ -82,8 +84,9 @@ qfc-server-wallet-ops/               # private
 | `qfc-policy` | Policy DSL is the most product-touching surface; tight iteration loop, deserves its own version cadence and test surface |
 | `qfc-quorum` | Approver coordination is async/networked logic; very different test profile from the rest (needs mock notification channels) |
 | `qfc-audit` | Audit sink is the most likely thing integrators replace (their existing SIEM, their existing event bus) |
+| `qfc-wallet-types` | Internal-only — holds cross-crate ID/scheme/secret types so `qfc-enclave` and `qfc-sss` don't form a dep cycle (the enclave needs `EncryptedShare`, the share store needs `WalletId`). Not a "seam" for integrators; a types crate. Added in M1 per [D1](m1-decisions.md#d1). |
 
-Three-crate or one-crate layouts make the binary monolithic and force integrators to fork to customize any single piece. Six is the smallest split that gives meaningful seams.
+Three-crate or one-crate layouts make the binary monolithic and force integrators to fork to customize any single piece. Six is the smallest split that gives meaningful seams; the 7th `qfc-wallet-types` crate exists for *types*, not *seams*, and the "meaningful seams" reasoning above is unchanged.
 
 ### 1.4 Dependencies on `qfc-core`
 
@@ -192,6 +195,8 @@ pub struct EnclaveSignResponse {
 - Decision freshness: `now - decision_timestamp <= max_age`
 
 The split is: policy service is the *authority on flexible rules* (custom DSL, ad-hoc rate limits, time windows); the enclave is the *authority on a small fixed set of hard limits* that can be reasoned about and audited line-by-line. Policy upgrades that touch only flexible rules do **not** require a new EIF; changes to hard ceilings do.
+
+**M3 GA blocker (v1.1).** This hybrid scheme is a **hard prerequisite for M3 GA**, not optional. Shipping a Nitro EIF whose `sign_in_enclave` doesn't re-verify the signed policy decision against hard ceilings leaves the most important security argument unmade — the enclave would be a crypto box only. M3 must extend `EnclaveSignRequest` with `policy_decision` and `approvals`, populate `Wallet.{max_value_cap, contract_allowlist, chain_allowlist}` as hard ceilings, and bake the invariant checker + signed-policy verifier into the EIF binary. See §7 (M3 ships) and the retro [§3.4](retro-m1-m2.md) for why M1+M2 deferred this (the orchestrator currently collects the policy decision; `MockEnclave` only does crypto).
 
 ### 2.2 `ShareStore`
 
@@ -428,7 +433,9 @@ pub enum AuditKind {
 Backends in M2:
 - `PostgresAuditSink` — strict ordering via row-level locks + sequence
 - `FileAuditSink` — append-only NDJSON file, for dev/local
-- `KafkaAuditSink` — for high-throughput, partition by `wallet_id`
+
+M2+ optional:
+- `KafkaAuditSink` — for high-throughput multi-tenant deployments, partition by `wallet_id`. Picked at config time per decision #6; deferred from M2 baseline because no customer needed it for M2 dev/staging.
 
 The hash-chained structure means tampering with any event invalidates the chain from that point forward; the daily anchor commitment (M2) pins the chain head to an on-chain QFC transaction so even chain operators can't quietly rewrite history.
 
@@ -476,6 +483,17 @@ pub struct PcrConstraint {
 ```
 
 **Decision (v1.0):** `wallet_id` is a **ULID**; the on-chain `qfc_address` (when applicable) is a separate field on `Wallet`. Two IDs serve two purposes: `wallet_id` is the stable logical identifier (curve-agnostic, survives PQ migration), `qfc_address` is the chain-queryable account. PQ wallets have `qfc_address = None` until/unless the chain accepts ML-DSA-derived addresses.
+
+**Shipping order annotation (v1.1).** The `Wallet` shape above is the target. The M1+M2 in-memory `WalletRecord` is a **subset projection**; full §3.1 fields land in stages. No field is removed — this is annotation, not redesign. See retro [§3.3](retro-m1-m2.md) for rationale.
+
+| Field | First shipped in |
+|-------|------------------|
+| `wallet_id`, `scheme`, `owner_id`, `threshold`, `total`, `policy_id`, `master_public_key`, `status`, `created_at`, `display_name` | **M1 / M2** (`WalletConfig` carries the M1 subset; service-level `WalletRecord` adds the rest) |
+| `enclave_pcr_constraint` | **M3** — only meaningful with `NitroEnclave`; no-op with `MockEnclave` |
+| `share_config.share_locations[]` | **M3** — single `ShareStore` instance in M2; multi-store fan-out lands with `S3KmsShareStore` |
+| `qfc_address` populated | **M3** — derivable from `master_public_key`; recompute on demand until M3 |
+| `quorum_config` | **M4** — quorum is policy-driven in M2; per-wallet override is M4 territory |
+| `hd_capable` | derived from `scheme` (ed25519/secp256k1 → true; ML-DSA → false); kept derived, not stored |
 
 ### 3.2 `KeyShare` record (stored in `ShareStore`)
 
@@ -773,8 +791,9 @@ Each milestone is independently shippable: it produces a tagged release on the p
 **Ships:**
 - `axum` HTTP API (REST, OpenAPI-documented): `POST /wallets`, `POST /wallets/{id}/sign`, `GET /wallets/{id}`, `GET /audit/events`
 - Full `Policy` DSL: chains, contracts, methods, value caps, time windows, rate limits, VM-shape constraints
-- VM decoders: `EvmDecoder`, `QvmDecoder`, `WasmDecoder`
-- `PostgresAuditSink` with hash-chained events, anchor commit job (cron, commits chain head to QFC chain daily)
+- VM decoders: `EvmDecoder` (~~`QvmDecoder`, `WasmDecoder` — deferred per decision #5 / §9.6; QVM-minimal lands in M5, full QVM in M6, WASM indefinitely~~)
+- `PostgresAuditSink` with hash-chained events; anchor commit **type shape only** (live cron deferred to M3 per retro [§3.7](retro-m1-m2.md))
+- ~~`KafkaAuditSink` — moved to "M2+ optional" per §2.6 / retro [§3.2](retro-m1-m2.md)~~
 - `tracing` + `tracing-opentelemetry` integration; `metrics-exporter-prometheus` endpoint at `/metrics`
 - Property tests for policy rule evaluation (proptest); golden tests for VM decoders
 - Postman/Bruno collection for manual API testing
@@ -792,6 +811,8 @@ Each milestone is independently shippable: it produces a tagged release on the p
 - `NitroEnclave` impl of `Enclave` trait (host-side; vsock IPC)
 - In-enclave binary (`enclave/boot.rs`) — minimal, no_std-friendly where possible, statically linked
 - Reproducible EIF build (Dockerfile.eif pinned; documented bit-exact reproduction steps; CI verifies PCR0 is stable across builds)
+- **Hybrid-scheme M3 GA blocker** (per §2.1): extend `EnclaveSignRequest` with `policy_decision: SignedPolicyDecision` and `approvals: Vec<SignedApproval>` (additive fields); populate `Wallet.{max_value_cap, contract_allowlist, chain_allowlist}` as hard ceilings; EIF binary includes the invariant checker + signed-policy verifier. Without this, M3 ships a TEE that doesn't enforce the hybrid scheme.
+- Live audit anchor cron (deferred from M2; M2 P2 shipped only the type shape — actual cron job + on-chain commit lands here, needs `qfc-core` dep and a funded operator account)
 - `S3KmsShareStore` with attestation-conditional KMS decrypt policy
 - Attestation verification library (`qfc-enclave::verify_attestation`) — anyone can pull this in to verify a QFC server wallet attestation
 - Public attestation verification page (static HTML on `attestation.qfc.network`) — takes attestation doc, returns "matches PCR0 X (rebuild yourself with `make verify-eif`)"
@@ -875,12 +896,14 @@ Rule: if leaked content would directly enable attacks on running production, it 
 
 | Audit type | Target milestone | Vendor candidates |
 |------------|------------------|-------------------|
-| Internal code review (independent qfc team) | Before M2 GA | qfc-core team rotation |
-| External Rust + crypto audit | Before M3 GA (Nitro) | Trail of Bits, Zellic, Cure53 |
+| Internal code review (independent qfc team) | Before M2 GA — **non-blocking when there is no production posture** (clarified v1.1) | qfc-core team rotation |
+| External Rust + crypto audit | Before M3 GA (Nitro) — **first mandatory human review** (v1.1) | Trail of Bits, Zellic, Cure53 |
 | External infra audit (Terraform, KMS, AWS hardening) | Before M3 GA | NCC Group, Doyensec, Bishop Fox |
 | Continuous: Immunefi bounty | From M4 | n/a |
 | PQ signer audit | Before M5 GA (PQ touches enclave code) | Trail of Bits has Dilithium familiarity |
 | Annual re-audit | Ongoing | Rotate vendors |
+
+**Clarification (v1.1).** M1+M2 shipped without an independent human security pass — Claude was the sole author and no qfc-core team rotation happened. This is acceptable while there is **no production deployment**: the pre-M2 internal review is non-blocking when the milestone has no production posture. The **pre-M3 external audit becomes the first mandatory human security review** and must not be skipped, since M3 is when real TEE custody begins serving real signing requests. See retro [§3.8](retro-m1-m2.md).
 
 ### 8.5 Reproducible builds
 
@@ -994,16 +1017,14 @@ All open decisions from v0.1 §10 are resolved below. Each entry: decision, wher
 
 ---
 
-## 11. Next steps (post-v1.0)
+## 11. Next steps (post-v1.1)
 
-Decisions resolved (§10). What's next, in order:
+Bootstrap, `gh repo create`, and M1+M2 implementation are all done (228 tests on `main` at v1.1 cut). What's next, in order:
 
-1. **Execute §12 repo bootstrap checklist** — prepare files locally before `gh repo create`.
-2. **Create public repo `qfc-network/qfc-server-wallet`** and private sister repo `qfc-network/qfc-server-wallet-ops`. Migrate this RFC into `qfc-server-wallet/docs/server-wallet-rfc.md` and update any references.
-3. **Kick off `qfc-core` preparatory work in parallel** — add `publish = true`, descriptions, repository URL, release workflow for `qfc-types` then `qfc-crypto`. Until first publish, the server-wallet workspace uses a git dep pinned to a commit hash.
-4. **Open M1 tracking issue**, begin implementation following §7 M1 scope.
-5. **Schedule M3 audit vendor outreach** — Trail of Bits / Zellic / Cure53 book 8–12 weeks out; reaching out at the start of M2 keeps M3 GA on schedule.
-6. **Watch `qfc-core`** for a `QvmCall` tx variant + canonical encoding; revisit M5/M6 QVM decoder scope when it lands.
+1. **Start M4 (M-of-N Quorum) before M3 (Nitro Enclave)** — per the retro's recommendation ([retro §6](retro-m1-m2.md)). M3 requires the §2.1 hybrid scheme; the hybrid scheme is much easier to design against once *real* approvers exist (not mocks). M4 also unblocks the most product-visible feature (treasury approvals) without an AWS / external-audit calendar dependency. If external constraints (audit vendor calendar, AWS region work) force M3 first, the M3 hybrid scheme ships against mock approvers and gets re-validated in M4 — call this out explicitly when sequencing.
+2. **Schedule M3 audit vendor outreach now** — Trail of Bits / Zellic / Cure53 book 8–12 weeks out; reaching out during M4 keeps the M3 GA calendar tight. Per §8.4 this is the first mandatory human security review.
+3. **Kick off `qfc-core` preparatory work in parallel with M4** — add `publish = true`, descriptions, repository URL, release workflow for `qfc-types` then `qfc-crypto`. The server-wallet workspace currently has no `qfc-core` dep (see retro [§3.6](retro-m1-m2.md)); landing it in parallel with M4 keeps M3 unblocked since M3 needs `qfc-address` derivation and the live audit anchor cron both depend on `qfc-core`.
+4. **Watch `qfc-core`** for a `QvmCall` tx variant + canonical encoding; revisit M5/M6 QVM decoder scope when it lands.
 
 ---
 
@@ -1023,7 +1044,7 @@ Everything to prepare locally before the public `qfc-network/qfc-server-wallet` 
 | `CONTRIBUTING.md` | How to contribute | DCO sign-off required, PR template, link to `docs/policy-dsl.md` once written, CI requirements (clippy/fmt/deny/audit must pass), crypto PR rule (2 reviewers) |
 | `.gitignore` | Standard Rust + workspace | `/target/`, `Cargo.lock` (keep for binary crates — see below), `.envrc`, `.direnv/`, `.vscode/`, `.idea/`, `*.swp`, `.DS_Store`, `enclave/build/`, `enclave/*.eif`, `policies/*.local.json` |
 | `.gitattributes` | LF normalization | `* text=auto eol=lf`, mark `*.eif` and `enclave/build/**` as binary |
-| `rust-toolchain.toml` | Pin rustc | `[toolchain]\nchannel = "1.83.0"\ncomponents = ["rustfmt", "clippy", "rust-src"]\nprofile = "minimal"` — pinning patch version is necessary for reproducible EIF (§9.5) |
+| `rust-toolchain.toml` | Pin rustc | `[toolchain]\nchannel = "1.88.0"\ncomponents = ["rustfmt", "clippy", "rust-src"]\nprofile = "minimal"` — pinning patch version is necessary for reproducible EIF (§9.5). **v1.1 update**: bumped from initial 1.83.0 target due to two forced upgrades — (a) edition 2024 via `wit-bindgen` → ≥ 1.85; (b) `cargo-deny` CVSS 4.0 advisory parser → ≥ 1.88. Revisit pin policy at M3 when the EIF build container is finalized; host toolchain is decoupled from the in-enclave build per §9.5. |
 | `Cargo.toml` (workspace root) | Workspace manifest | Members = all six crates + (later) `enclave/`. Shared `[workspace.package]` and `[workspace.dependencies]` mirroring `qfc-core/Cargo.toml` style |
 | `deny.toml` | cargo-deny config | See §12.5 |
 | `cargo-vet.toml` (`supply-chain/`) | cargo-vet config | Initialized via `cargo vet init`; trust seeded with Rustsec + RustCrypto orgs |
