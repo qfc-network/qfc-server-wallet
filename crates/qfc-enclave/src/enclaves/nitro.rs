@@ -205,10 +205,8 @@ impl NitroEnclave {
     /// Send a request, wait for a response. Real implementation requires
     /// the `nitro` feature. The stub branch returns `NotImplemented` so the
     /// trait surface is uniform on dev hosts.
-    async fn round_trip(
-        &self,
-        _req: NitroWireRequest,
-    ) -> Result<NitroWireResponse, EnclaveError> {
+    #[allow(clippy::used_underscore_binding)]
+    async fn round_trip(&self, _req: NitroWireRequest) -> Result<NitroWireResponse, EnclaveError> {
         #[cfg(feature = "nitro")]
         {
             // SAFETY: tokio-vsock's API is safe Rust; no unsafe block needed.
@@ -217,12 +215,13 @@ impl NitroEnclave {
             // `serde_json::to_vec(&NitroWireRequest)`. The enclave-side
             // counterpart (`enclave/src/main.rs`) mirrors this.
             use futures::SinkExt;
-            use tokio_util::codec::{Framed, LengthDelimitedCodec};
             use tokio_stream::StreamExt;
+            use tokio_util::codec::{Framed, LengthDelimitedCodec};
 
-            let stream = tokio_vsock::VsockStream::connect(
-                tokio_vsock::VsockAddr::new(self.vsock_addr.cid, self.vsock_addr.port),
-            )
+            let stream = tokio_vsock::VsockStream::connect(tokio_vsock::VsockAddr::new(
+                self.vsock_addr.cid,
+                self.vsock_addr.port,
+            ))
             .await
             .map_err(|e| {
                 EnclaveError::Attestation(crate::attestation::AttestationError::PayloadParse(
@@ -333,9 +332,9 @@ impl Enclave for NitroEnclave {
     async fn attest(&self, nonce: [u8; 32]) -> Result<AttestationDoc, EnclaveError> {
         match self.round_trip(NitroWireRequest::Attest { nonce }).await? {
             NitroWireResponse::Attest { attestation } => Ok(attestation),
-            NitroWireResponse::Error { message } => {
-                Err(EnclaveError::InvalidRequest(Box::leak(message.into_boxed_str())))
-            }
+            NitroWireResponse::Error { message } => Err(EnclaveError::InvalidRequest(Box::leak(
+                message.into_boxed_str(),
+            ))),
             _ => Err(EnclaveError::InvalidRequest("unexpected nitro response")),
         }
     }
@@ -366,9 +365,9 @@ impl Enclave for NitroEnclave {
                 public_key,
                 attestation,
             }),
-            NitroWireResponse::Error { message } => Err(EnclaveError::InvalidRequest(
-                Box::leak(message.into_boxed_str()),
-            )),
+            NitroWireResponse::Error { message } => Err(EnclaveError::InvalidRequest(Box::leak(
+                message.into_boxed_str(),
+            ))),
             _ => Err(EnclaveError::InvalidRequest("unexpected nitro response")),
         }
     }
@@ -394,9 +393,9 @@ impl Enclave for NitroEnclave {
                 master_public_key,
                 attestation,
             }),
-            NitroWireResponse::Error { message } => Err(EnclaveError::InvalidRequest(
-                Box::leak(message.into_boxed_str()),
-            )),
+            NitroWireResponse::Error { message } => Err(EnclaveError::InvalidRequest(Box::leak(
+                message.into_boxed_str(),
+            ))),
             _ => Err(EnclaveError::InvalidRequest("unexpected nitro response")),
         }
     }

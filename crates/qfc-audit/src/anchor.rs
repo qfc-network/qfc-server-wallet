@@ -183,7 +183,10 @@ impl LocalFileAnchor {
     /// covers each anchor line so a leaked file plus a chain head
     /// extracted from logs cannot be retroactively rewritten.
     #[must_use]
-    pub fn new(path: impl Into<std::path::PathBuf>, signing_key: ed25519_dalek::SigningKey) -> Self {
+    pub fn new(
+        path: impl Into<std::path::PathBuf>,
+        signing_key: ed25519_dalek::SigningKey,
+    ) -> Self {
         Self {
             path: path.into(),
             signing_key: Arc::new(signing_key),

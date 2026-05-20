@@ -467,7 +467,10 @@ mod tests {
             store.put(&sample_share(w, idx)).await.unwrap();
         }
         let ids = store.list(&w).await.unwrap();
-        assert_eq!(ids.iter().map(|s| s.index).collect::<Vec<_>>(), vec![1, 2, 3]);
+        assert_eq!(
+            ids.iter().map(|s| s.index).collect::<Vec<_>>(),
+            vec![1, 2, 3]
+        );
     }
 
     #[tokio::test]
@@ -476,13 +479,7 @@ mod tests {
         // raw share bytes never appear in plaintext.
         let s3 = Arc::new(MockS3Client::new());
         let kms = Arc::new(MockKmsClient::new());
-        let store = S3KmsShareStore::new(
-            s3.clone(),
-            kms,
-            "p",
-            b"att".to_vec(),
-            "pcr".to_string(),
-        );
+        let store = S3KmsShareStore::new(s3.clone(), kms, "p", b"att".to_vec(), "pcr".to_string());
         let w = WalletId::new();
         let share = sample_share(w, 1);
         let raw_share_bytes = serde_json::to_vec(&share).unwrap();
@@ -491,7 +488,9 @@ mod tests {
         for (_, body) in snapshot {
             // The raw share bytes should not appear as a window of `body`.
             assert!(
-                !body.windows(raw_share_bytes.len()).any(|w| w == raw_share_bytes),
+                !body
+                    .windows(raw_share_bytes.len())
+                    .any(|w| w == raw_share_bytes),
                 "raw share bytes leaked into S3 body"
             );
         }
@@ -504,13 +503,7 @@ mod tests {
         let predicate: AttestationPredicate = Arc::new(|att: &[u8]| att == b"good");
         let kms = Arc::new(MockKmsClient::new().with_attestation_predicate(predicate));
         let s3 = Arc::new(MockS3Client::new());
-        let store = S3KmsShareStore::new(
-            s3,
-            kms,
-            "p",
-            b"WRONG-att".to_vec(),
-            "pcr".to_string(),
-        );
+        let store = S3KmsShareStore::new(s3, kms, "p", b"WRONG-att".to_vec(), "pcr".to_string());
         let w = WalletId::new();
         let s = sample_share(w, 1);
         store.put(&s).await.unwrap();
@@ -535,13 +528,7 @@ mod tests {
     async fn tampered_ciphertext_fails_decrypt() {
         let s3 = Arc::new(MockS3Client::new());
         let kms = Arc::new(MockKmsClient::new());
-        let store = S3KmsShareStore::new(
-            s3.clone(),
-            kms,
-            "",
-            b"att".to_vec(),
-            "pcr".to_string(),
-        );
+        let store = S3KmsShareStore::new(s3.clone(), kms, "", b"att".to_vec(), "pcr".to_string());
         let w = WalletId::new();
         let s = sample_share(w, 1);
         store.put(&s).await.unwrap();

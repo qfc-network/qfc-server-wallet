@@ -101,10 +101,7 @@ impl PcrConstraint {
     /// # Errors
     ///
     /// `AttestationVerifyError::PcrMismatch` on the first mismatch.
-    pub fn check(
-        &self,
-        observed: &BTreeMap<u8, Vec<u8>>,
-    ) -> Result<(), AttestationVerifyError> {
+    pub fn check(&self, observed: &BTreeMap<u8, Vec<u8>>) -> Result<(), AttestationVerifyError> {
         for (idx, expected) in [
             (0u8, self.pcr0.as_ref()),
             (1, self.pcr1.as_ref()),
@@ -113,9 +110,9 @@ impl PcrConstraint {
             (4, self.pcr4.as_ref()),
         ] {
             let Some(expected) = expected else { continue };
-            let observed_bytes = observed.get(&idx).ok_or(
-                AttestationVerifyError::PcrMismatch { index: idx },
-            )?;
+            let observed_bytes = observed
+                .get(&idx)
+                .ok_or(AttestationVerifyError::PcrMismatch { index: idx })?;
             if observed_bytes.as_slice() != expected.as_slice() {
                 return Err(AttestationVerifyError::PcrMismatch { index: idx });
             }
@@ -284,11 +281,7 @@ pub fn verify_attestation(
     // M3 skeleton: leaf_certificate carries a raw ed25519 public key (32 B).
     // Future PR replaces this with proper X.509 leaf-cert parsing + ECDSA
     // P-384 verification per AWS Nitro spec.
-    verify_ed25519_signature(
-        &doc.leaf_certificate,
-        &doc.cose_sign1,
-        &doc.signature,
-    )?;
+    verify_ed25519_signature(&doc.leaf_certificate, &doc.cose_sign1, &doc.signature)?;
 
     // 5. Cert-chain validation TODO. The M3 skeleton accepts any `cabundle`
     //    that's non-empty. A future PR pulls in `webpki` + the pinned AWS
@@ -400,8 +393,7 @@ mod tests {
             }
             p0
         });
-        let verified =
-            verify_attestation(&doc, &pcrs, &anchor, now, 60_000).expect("verifies");
+        let verified = verify_attestation(&doc, &pcrs, &anchor, now, 60_000).expect("verifies");
         assert_eq!(verified.payload.user_data, b"user-data");
     }
 
@@ -412,7 +404,10 @@ mod tests {
         let bad_pcr = [0xEEu8; PCR_LEN];
         let pcrs = PcrConstraint::pcr0_only(bad_pcr);
         let err = verify_attestation(&doc, &pcrs, &anchor, now, 60_000);
-        assert!(matches!(err, Err(AttestationVerifyError::PcrMismatch { index: 0 })));
+        assert!(matches!(
+            err,
+            Err(AttestationVerifyError::PcrMismatch { index: 0 })
+        ));
     }
 
     #[test]

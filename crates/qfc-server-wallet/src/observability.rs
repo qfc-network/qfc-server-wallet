@@ -9,7 +9,7 @@
 //!     the OpenTelemetry layer is omitted entirely (zero overhead).
 //!   * When [`ObservabilityConfig::prometheus_listen_addr`] is `Some`, a
 //!     standalone Prometheus HTTP listener is started. A
-//!     [`PrometheusHandle`](metrics_exporter_prometheus::PrometheusHandle) is
+//!     [`PrometheusHandle`] is
 //!     always installed so [`prometheus_endpoint`] can mount `/metrics`
 //!     into an external Axum router (e.g. the M2 P1 HTTP server).
 //!
