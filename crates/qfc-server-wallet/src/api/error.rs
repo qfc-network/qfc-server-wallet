@@ -35,8 +35,10 @@ pub enum ApiError {
     Forbidden(String),
     /// 404 — wallet or other resource not found.
     NotFound(String),
-    /// 409 — quorum collection failed (timeout, reject, …).
+    /// 409 — quorum collection failed (timeout, reject, …) or duplicate approval.
     Conflict(String),
+    /// 422 — semantically invalid request (e.g. unverified signature).
+    UnprocessableEntity(String),
     /// 500 — anything else (enclave fault, store I/O, audit I/O, …).
     Internal(String),
 }
@@ -49,6 +51,11 @@ impl ApiError {
             Self::Forbidden(m) => (StatusCode::FORBIDDEN, "policy_denied", m.as_str()),
             Self::NotFound(m) => (StatusCode::NOT_FOUND, "wallet_not_found", m.as_str()),
             Self::Conflict(m) => (StatusCode::CONFLICT, "quorum_failed", m.as_str()),
+            Self::UnprocessableEntity(m) => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "approval_verification_failed",
+                m.as_str(),
+            ),
             Self::Internal(m) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "internal_error",

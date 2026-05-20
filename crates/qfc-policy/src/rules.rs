@@ -8,7 +8,7 @@
 //! tag-discriminated (`{"kind": "deny_chain", ...}`) so an unknown rule
 //! kind is a parse error rather than a silently-skipped allow-by-default.
 
-use qfc_wallet_types::{ApprovalId, PolicyId};
+use qfc_wallet_types::{ApproverSetId, PolicyId};
 use serde::{Deserialize, Serialize};
 
 use crate::request::VmType;
@@ -113,7 +113,7 @@ pub enum Rule {
         /// Total approvers in the set.
         total: u8,
         /// Identifier of the approver set to ask.
-        approver_set: ApprovalId,
+        approver_set: ApproverSetId,
         /// Condition that activates the quorum requirement.
         trigger: QuorumTrigger,
     },
@@ -272,7 +272,7 @@ mod tests {
 
     #[test]
     fn json_round_trip_quorum_value_gte() {
-        let approver = ApprovalId::new();
+        let approver = ApproverSetId::new();
         let rule = Rule::RequireQuorum {
             threshold: 3,
             total: 5,

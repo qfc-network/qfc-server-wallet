@@ -1,6 +1,6 @@
 //! Policy decisions, rule trace, and error types.
 
-use qfc_wallet_types::{ApprovalId, DecisionId, PolicyId};
+use qfc_wallet_types::{ApproverSetId, DecisionId, PolicyId};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -80,7 +80,7 @@ pub enum PolicyDecision {
         /// Total approvers in the set.
         total: u8,
         /// Identifier of the approver set to ask.
-        approver_set: ApprovalId,
+        approver_set: ApproverSetId,
         /// Rules that matched, in match order.
         rationale: Vec<RuleHit>,
     },

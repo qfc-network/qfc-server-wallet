@@ -13,7 +13,9 @@ use qfc_enclave::{
     Enclave, EnclaveSignRequest, EnclaveSignResponse, GenerateWalletRequest, SigningContext,
 };
 use qfc_policy::{Policy, PolicyDecision, SigningPayload, SigningRequest};
-use qfc_quorum::{ApprovalRequest, QuorumApprover, SignedApproval};
+use qfc_quorum::{
+    ApprovalRequest, ApprovalStore, ApproverRegistry, QuorumApprover, RecordOutcome, SignedApproval,
+};
 use qfc_sss::{ShareStore, StoredShare};
 use qfc_wallet_types::{HashAlg, HdPath, RequestId, ShareId, WalletId};
 use serde_json::json;
@@ -72,12 +74,22 @@ pub struct WalletService {
     pub(crate) policy: Arc<dyn Policy>,
     pub(crate) quorum: Arc<dyn QuorumApprover>,
     pub(crate) audit: Arc<dyn AuditSink>,
+    /// Approver / approver-set admin surface (M4).
+    pub(crate) approvers: Arc<dyn ApproverRegistry>,
+    /// Submitted-approvals store (M4). Backs both the HTTP approval
+    /// submission endpoint and the `OrchestratingApprover` collector.
+    pub(crate) approval_store: Arc<dyn ApprovalStore>,
     pub(crate) wallets: Arc<RwLock<HashMap<WalletId, WalletRecord>>>,
     pub(crate) quorum_timeout: Duration,
 }
 
 impl WalletService {
     /// Build a new `WalletService` from its subsystem dependencies.
+    ///
+    /// The approver registry + approval store default to in-memory
+    /// implementations; production deployments swap with
+    /// [`WalletService::with_approver_registry`] /
+    /// [`WalletService::with_approval_store`].
     #[must_use]
     pub fn new(
         enclave: Arc<dyn Enclave>,
@@ -92,9 +104,27 @@ impl WalletService {
             policy,
             quorum,
             audit,
+            approvers: Arc::new(qfc_quorum::MemoryApproverRegistry::new()),
+            approval_store: Arc::new(qfc_quorum::MemoryApprovalStore::new()),
             wallets: Arc::new(RwLock::new(HashMap::new())),
             quorum_timeout: Duration::from_secs(120),
         }
+    }
+
+    /// Override the approver registry. Useful for swapping to
+    /// `PostgresApproverRegistry` in production.
+    #[must_use]
+    pub fn with_approver_registry(mut self, registry: Arc<dyn ApproverRegistry>) -> Self {
+        self.approvers = registry;
+        self
+    }
+
+    /// Override the approval store. Useful for swapping to
+    /// `PostgresApprovalStore` in production.
+    #[must_use]
+    pub fn with_approval_store(mut self, store: Arc<dyn ApprovalStore>) -> Self {
+        self.approval_store = store;
+        self
     }
 
     /// Override the quorum-collection timeout (default: 120s).
@@ -284,28 +314,83 @@ impl WalletService {
             PolicyDecision::RequireQuorum {
                 threshold,
                 total: _,
+                approver_set,
                 ..
             } => {
+                // Resolve the approver set from the registry so we can fan
+                // out notifications to its members. If the set is unknown,
+                // policy still ran — but we can't proceed: emit a system
+                // error and surface as InsufficientShares-ish failure.
+                let set = self.approvers.get_approver_set(*approver_set).await.ok();
+                let identities: Vec<qfc_quorum::ApproverIdentity> = match &set {
+                    Some(set) => {
+                        let mut ids = Vec::with_capacity(set.members.len());
+                        for m in &set.members {
+                            let rec = self.approvers.get_approver(*m).await.map_err(|e| {
+                                ServiceError::Quorum(qfc_quorum::QuorumError::Transport(format!(
+                                    "registry: {e}"
+                                )))
+                            })?;
+                            ids.push(rec.identity);
+                        }
+                        ids
+                    }
+                    None => Vec::new(),
+                };
+                let approval_request = ApprovalRequest {
+                    request_id,
+                    message_hash,
+                    approver_set: identities,
+                    threshold: *threshold,
+                };
+                self.quorum
+                    .request_approval(&approval_request)
+                    .await
+                    .map_err(ServiceError::Quorum)?;
                 self.audit
                     .emit(AuditEventDraft {
                         actor: Actor::System,
                         kind: AuditKind::QuorumNotified,
                         request_id: Some(request_id),
                         wallet_id: Some(wallet_id),
-                        details: json!({ "threshold": threshold }),
+                        details: json!({
+                            "threshold": threshold,
+                            "approver_set": approver_set.to_string(),
+                        }),
                     })
                     .await?;
-                // The orchestrator's job is to *coordinate* — building the
-                // approver set out of policy + wallet config is part of the
-                // larger policy DSL (M2). For M1 we expect the caller
-                // (test) to pre-stage approvals on the quorum backend so
-                // collect_approvals returns immediately.
+
                 let quorum_started = Instant::now();
-                let approvals = self
+                let collect_timeout = set
+                    .as_ref()
+                    .and_then(|s| s.quorum_timeout_secs)
+                    .map_or(self.quorum_timeout, |s| Duration::from_secs(u64::from(s)));
+                let collect_result = self
                     .quorum
-                    .collect_approvals(&request_id, *threshold, self.quorum_timeout)
-                    .await?;
+                    .collect_approvals(&request_id, *threshold, collect_timeout)
+                    .await;
                 record_quorum_collect(quorum_started.elapsed().as_secs_f64());
+                let approvals = match collect_result {
+                    Ok(a) => a,
+                    Err(qfc_quorum::QuorumError::Timeout(d)) => {
+                        self.audit
+                            .emit(AuditEventDraft {
+                                actor: Actor::System,
+                                kind: AuditKind::QuorumTimedOut,
+                                request_id: Some(request_id),
+                                wallet_id: Some(wallet_id),
+                                details: json!({ "timeout_ms": d.as_millis() }),
+                            })
+                            .await?;
+                        record_sign_outcome(scheme, SignResult::Denied);
+                        record_sign_duration(scheme, sign_started.elapsed().as_secs_f64());
+                        tracing::Span::current().record("outcome", "quorum_timeout");
+                        return Err(ServiceError::Quorum(qfc_quorum::QuorumError::Timeout(d)));
+                    }
+                    Err(e) => {
+                        return Err(ServiceError::Quorum(e));
+                    }
+                };
                 for approval in &approvals {
                     self.audit
                         .emit(AuditEventDraft {
@@ -326,7 +411,7 @@ impl WalletService {
                         })
                         .await?;
                 }
-                // Any reject (mock surfaces the first one) blocks the sign.
+                // Any reject (the collector surfaces the first one) blocks the sign.
                 if let Some(reject) = approvals
                     .iter()
                     .find(|a| matches!(a.decision, qfc_quorum::ApprovalDecision::Reject))
@@ -334,18 +419,31 @@ impl WalletService {
                     record_sign_outcome(scheme, SignResult::Denied);
                     record_sign_duration(scheme, sign_started.elapsed().as_secs_f64());
                     tracing::Span::current().record("outcome", "quorum_rejected");
-                    return Err(ServiceError::Quorum(
-                        qfc_quorum::QuorumError::InvalidApproval(
-                            qfc_quorum::ApprovalVerifyError::WrongRequest,
-                        ),
-                    ))
-                    .map_err(|_| {
-                        ServiceError::PolicyDenied(format!(
-                            "quorum rejected by {}",
-                            reject.approver.key(),
-                        ))
-                    });
+                    return Err(ServiceError::PolicyDenied(format!(
+                        "quorum rejected by {}",
+                        reject.approver.key(),
+                    )));
                 }
+                // Threshold reached — emit the "we got M signed approvals"
+                // audit event so timelines distinguish "request sent" from
+                // "request approved".
+                self.audit
+                    .emit(AuditEventDraft {
+                        actor: Actor::System,
+                        kind: AuditKind::QuorumThresholdReached,
+                        request_id: Some(request_id),
+                        wallet_id: Some(wallet_id),
+                        details: json!({
+                            "threshold": threshold,
+                            "collected": approvals.len(),
+                        }),
+                    })
+                    .await?;
+                // TODO(M3): pass `approvals` and the `PolicyDecision` into
+                // EnclaveSignRequest so the enclave re-verifies the hybrid
+                // policy invariants (see retro-m1-m2 §3.4). Today the
+                // orchestrator trusts the host count; with the M3 Nitro
+                // backend this becomes load-bearing.
             }
             PolicyDecision::Allow { .. } => {}
         }
@@ -438,20 +536,95 @@ impl WalletService {
         Ok(out)
     }
 
-    /// Submit an approval into the quorum subsystem.
+    /// Record a submitted approval. Verifies the embedded signature against
+    /// the message hash and request id derived from the in-flight request,
+    /// persists into the approval store, and (when the underlying
+    /// `QuorumApprover` is an `OrchestratingApprover`) signals the
+    /// collector to recheck.
     ///
-    /// M1 placeholder: tests using `MockQuorumApprover` go through its
-    /// concrete `submit()` because the trait surface doesn't expose
-    /// `submit` (it's a backend implementation detail). When M4 lands the
-    /// HTTP approver API, this method will route to the trait once we
-    /// extend `QuorumApprover` with a submission verb.
+    /// The caller (typically the `POST /requests/{request_id}/approvals`
+    /// handler) is responsible for resolving the approver record from the
+    /// registry; this method then runs the *cryptographic* verification
+    /// against the registered identity, freshness, and request binding.
+    ///
+    /// Re-submission of the SAME approval payload is idempotent
+    /// (`Inserted` → `AlreadyRecorded`); a different payload from the same
+    /// approver for the same request raises `Quorum` /
+    /// `ApprovalStoreError::DuplicateApproval`.
     ///
     /// # Errors
     ///
-    /// None in M1; reserved for future routing failures.
-    #[allow(clippy::unused_async, clippy::unnecessary_wraps)]
-    pub async fn record_approval(&self, _approval: SignedApproval) -> Result<(), ServiceError> {
-        Ok(())
+    /// - `ServiceError::Quorum` for verification or duplicate failures.
+    pub async fn record_approval(
+        &self,
+        approval: SignedApproval,
+        approver_id: qfc_wallet_types::ApproverId,
+        expected_message_hash: [u8; 32],
+    ) -> Result<RecordOutcome, ServiceError> {
+        // Look up the approver to enforce the registered identity matches
+        // the embedded one (defence in depth: the API request may have
+        // claimed approver_id X but signed with the key of approver_id Y).
+        let rec = self
+            .approvers
+            .get_approver(approver_id)
+            .await
+            .map_err(|e| {
+                ServiceError::Quorum(qfc_quorum::QuorumError::Transport(format!("registry: {e}")))
+            })?;
+        if rec.identity != approval.approver {
+            return Err(ServiceError::Quorum(
+                qfc_quorum::QuorumError::UnknownApprover(approval.approver.key()),
+            ));
+        }
+        if matches!(rec.status, qfc_quorum::ApproverStatus::Revoked) {
+            return Err(ServiceError::Quorum(
+                qfc_quorum::QuorumError::UnknownApprover(format!(
+                    "approver {approver_id} is revoked"
+                )),
+            ));
+        }
+
+        // Verify the signature + freshness + binding.
+        approval
+            .verify(
+                &approval.request_id,
+                &expected_message_hash,
+                current_unix_ms(),
+            )
+            .map_err(|e| ServiceError::Quorum(qfc_quorum::QuorumError::InvalidApproval(e)))?;
+
+        let outcome = self
+            .approval_store
+            .record_approval(&approval, approver_id)
+            .await
+            .map_err(|e| match e {
+                qfc_quorum::ApprovalStoreError::DuplicateApproval(_, _) => ServiceError::Quorum(
+                    qfc_quorum::QuorumError::Transport(format!("duplicate approval: {e}")),
+                ),
+                qfc_quorum::ApprovalStoreError::Io(msg) => {
+                    ServiceError::Quorum(qfc_quorum::QuorumError::Transport(msg))
+                }
+            })?;
+        Ok(outcome)
+    }
+
+    /// Borrow the underlying approver registry. Used by the HTTP handlers.
+    #[must_use]
+    pub fn approver_registry(&self) -> &Arc<dyn ApproverRegistry> {
+        &self.approvers
+    }
+
+    /// Borrow the underlying approval store. Used by the HTTP handlers.
+    #[must_use]
+    pub fn approval_store(&self) -> &Arc<dyn ApprovalStore> {
+        &self.approval_store
+    }
+
+    /// Borrow the underlying quorum approver. Used by the HTTP handlers
+    /// to call `notify_arrival` on the `OrchestratingApprover`.
+    #[must_use]
+    pub fn quorum(&self) -> &Arc<dyn QuorumApprover> {
+        &self.quorum
     }
 }
 

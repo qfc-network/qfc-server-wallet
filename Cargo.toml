@@ -97,6 +97,9 @@ tower-http = { version = "0.6", features = ["trace", "cors"] }
 utoipa = { version = "4", features = ["axum_extras"] }
 utoipa-swagger-ui = { version = "7", features = ["axum"] }
 
+# Webhook client (qfc-quorum M4)
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
 # Testing
 proptest = "1.5"
 tokio-test = "0.4"
@@ -105,6 +108,7 @@ testcontainers = "0.23"
 testcontainers-modules = { version = "0.11", features = ["postgres"] }
 hyper = { version = "1", features = ["full"] }
 http-body-util = "0.1"
+wiremock = "0.6"
 
 [profile.release]
 opt-level = 3

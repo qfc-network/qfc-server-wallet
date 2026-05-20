@@ -775,7 +775,7 @@ mod tests {
     use crate::vm::{DecodedTx, VmDecoder};
     use crate::AllowDefault;
     use proptest::prelude::*;
-    use qfc_wallet_types::{ApprovalId, PolicyId, RequestId, WalletId};
+    use qfc_wallet_types::{ApproverSetId, PolicyId, RequestId, WalletId};
 
     fn empty_rs() -> RuleSet {
         RuleSet {
@@ -909,7 +909,7 @@ mod tests {
             rules: vec![Rule::RequireQuorum {
                 threshold: 6,
                 total: 5,
-                approver_set: ApprovalId::new(),
+                approver_set: ApproverSetId::new(),
                 trigger: QuorumTrigger::Always,
             }],
             ..empty_rs()
@@ -1329,7 +1329,7 @@ mod tests {
 
     #[tokio::test]
     async fn quorum_always() {
-        let approver = ApprovalId::new();
+        let approver = ApproverSetId::new();
         let rs = RuleSet {
             rules: vec![Rule::RequireQuorum {
                 threshold: 2,
@@ -1367,7 +1367,7 @@ mod tests {
             rules: vec![Rule::RequireQuorum {
                 threshold: 2,
                 total: 3,
-                approver_set: ApprovalId::new(),
+                approver_set: ApproverSetId::new(),
                 trigger: QuorumTrigger::ValueGte {
                     chain_id: 1,
                     value: "1000".to_string(),
@@ -1391,7 +1391,7 @@ mod tests {
             rules: vec![Rule::RequireQuorum {
                 threshold: 2,
                 total: 3,
-                approver_set: ApprovalId::new(),
+                approver_set: ApproverSetId::new(),
                 trigger: QuorumTrigger::ValueGte {
                     chain_id: 1,
                     value: "1000".to_string(),
@@ -1414,7 +1414,7 @@ mod tests {
             rules: vec![Rule::RequireQuorum {
                 threshold: 2,
                 total: 3,
-                approver_set: ApprovalId::new(),
+                approver_set: ApproverSetId::new(),
                 trigger: QuorumTrigger::OutsideTimeWindow {
                     weekday_mask: 0b0110_0000,
                     hour_utc_start: 0,
@@ -1517,7 +1517,7 @@ mod tests {
                 Rule::RequireQuorum {
                     threshold: 1,
                     total: 1,
-                    approver_set: ApprovalId::new(),
+                    approver_set: ApproverSetId::new(),
                     trigger: QuorumTrigger::Always,
                 },
             ],
@@ -1643,7 +1643,7 @@ mod tests {
                 rules: vec![Rule::RequireQuorum {
                     threshold: 2,
                     total: 3,
-                    approver_set: ApprovalId::new(),
+                    approver_set: ApproverSetId::new(),
                     trigger: QuorumTrigger::ValueGte {
                         chain_id: 1,
                         value: thresh.to_string(),

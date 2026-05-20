@@ -45,6 +45,8 @@ pub enum AuditKind {
     QuorumApprovalRejected,
     /// Quorum collection timed out.
     QuorumTimedOut,
+    /// Quorum collected the required number of approvals (`threshold` met).
+    QuorumThresholdReached,
     /// The enclave was asked to sign.
     SigningAttempted,
     /// The signing call succeeded.
@@ -131,6 +133,7 @@ pub const fn kind_byte(k: AuditKind) -> u8 {
         AuditKind::ApproverSetChanged => 13,
         AuditKind::SystemError => 14,
         AuditKind::EnclaveAttested => 15,
+        AuditKind::QuorumThresholdReached => 16,
     }
 }
 

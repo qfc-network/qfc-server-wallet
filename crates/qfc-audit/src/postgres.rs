@@ -297,6 +297,7 @@ fn kind_from_byte(b: u8) -> Result<AuditKind, AuditError> {
         13 => AuditKind::ApproverSetChanged,
         14 => AuditKind::SystemError,
         15 => AuditKind::EnclaveAttested,
+        16 => AuditKind::QuorumThresholdReached,
         other => {
             return Err(AuditError::Serde(format!(
                 "unknown audit kind byte: {other}"

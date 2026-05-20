@@ -21,6 +21,9 @@ mod secret;
 
 pub use errors::{ParseError, TypeError};
 pub use hd_path::{HdPath, HdPathSegment};
-pub use ids::{ApprovalId, DecisionId, EventId, OwnerId, PolicyId, RequestId, ShareId, WalletId};
+pub use ids::{
+    ApprovalId, ApproverId, ApproverSetId, DecisionId, EventId, OwnerId, PolicyId, RequestId,
+    ShareId, WalletId,
+};
 pub use scheme::{HashAlg, SigningScheme};
 pub use secret::SecretBytes;
