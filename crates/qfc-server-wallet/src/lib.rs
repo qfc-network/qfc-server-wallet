@@ -15,21 +15,15 @@
 #![warn(clippy::pedantic)]
 #![allow(clippy::module_name_repetitions)]
 
-<<<<<<< HEAD
 pub mod api;
-pub mod service;
-pub mod wallet;
-
-pub use api::{router, AppState};
-=======
 pub mod observability;
 pub mod service;
 pub mod wallet;
 
+pub use api::{router, AppState};
 pub use observability::{
     http_layer, init, prometheus_endpoint, ObservabilityConfig, ObservabilityError,
     ObservabilityHandle, SignResult,
 };
->>>>>>> 5620fe6 (feat(observability): tracing-otel + Prometheus exporter (M2 P5))
 pub use service::{ServiceError, WalletService};
 pub use wallet::{WalletConfig, WalletRecord, WalletStatus};

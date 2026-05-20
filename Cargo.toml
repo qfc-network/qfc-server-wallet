@@ -86,20 +86,14 @@ opentelemetry_sdk = { version = "0.26", features = ["rt-tokio"] }
 metrics = "0.23"
 metrics-exporter-prometheus = { version = "0.15", default-features = false, features = ["http-listener"] }
 
-# Tower / HTTP middleware
-tower = "0.5"
-tower-http = { version = "0.6", features = ["trace"] }
-axum = "0.7"
-http = "1"
-
 # Postgres (used by qfc-audit M2)
 sqlx = { version = "0.8", default-features = false, features = ["postgres", "runtime-tokio-rustls", "macros", "migrate", "chrono"] }
 
-# HTTP / API surface (M2 P1)
+# HTTP / API surface + middleware (M2 P1, also used by P5 observability)
 axum = { version = "0.7", features = ["json", "macros"] }
 http = "1"
 tower = "0.5"
-tower-http = { version = "0.5", features = ["trace", "cors"] }
+tower-http = { version = "0.6", features = ["trace", "cors"] }
 utoipa = { version = "4", features = ["axum_extras"] }
 utoipa-swagger-ui = { version = "7", features = ["axum"] }
 
