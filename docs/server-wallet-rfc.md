@@ -1,14 +1,15 @@
 # RFC: QFC Server Wallet (Privy-style TEE custody + M-of-N quorum)
 
-**Status:** v1.1 — accepted
+**Status:** v1.2 — accepted
 **Author:** Claude (drafted for Larry)
-**Date:** 2026-05-19 (v0.1) · 2026-05-19 (v1.0, decisions applied) · 2026-05-21 (v1.1, retro fold-back)
+**Date:** 2026-05-19 (v0.1) · 2026-05-19 (v1.0, decisions applied) · 2026-05-21 (v1.1, retro fold-back) · 2026-05-21 (v1.2, M3+M4 retro fold-back)
 **License of this doc:** Apache 2.0 (will live in public repo `qfc-server-wallet`)
 
 **Changelog**
 - v0.1 (2026-05-19) — initial draft, 11 open decisions in §10
 - v1.0 (2026-05-19) — decisions resolved by Larry; §10 rewritten as "Resolved decisions"; §9.6 rewritten with honest QVM/WASM ABI assessment from qfc-core code inspection; M5 scope adjusted accordingly; §12 "Repo bootstrap checklist" added
 - v1.1 (2026-05-21) — applied retro fold-backs after M1+M2 shipped (228 tests on main); see docs/retro-m1-m2.md
+- v1.2 (2026-05-21) — applied retro fold-backs after M3 skeleton + M4 quorum shipped (312 tests on main); see docs/retro-m3-m4.md
 
 ---
 
@@ -811,8 +812,8 @@ Each milestone is independently shippable: it produces a tagged release on the p
 - `NitroEnclave` impl of `Enclave` trait (host-side; vsock IPC)
 - In-enclave binary (`enclave/boot.rs`) — minimal, no_std-friendly where possible, statically linked
 - Reproducible EIF build (Dockerfile.eif pinned; documented bit-exact reproduction steps; CI verifies PCR0 is stable across builds)
-- **Hybrid-scheme M3 GA blocker** (per §2.1): extend `EnclaveSignRequest` with `policy_decision: SignedPolicyDecision` and `approvals: Vec<SignedApproval>` (additive fields); populate `Wallet.{max_value_cap, contract_allowlist, chain_allowlist}` as hard ceilings; EIF binary includes the invariant checker + signed-policy verifier. Without this, M3 ships a TEE that doesn't enforce the hybrid scheme.
-- Live audit anchor cron (deferred from M2; M2 P2 shipped only the type shape — actual cron job + on-chain commit lands here, needs `qfc-core` dep and a funded operator account)
+- **Hybrid-scheme M3 GA blocker** (per §2.1): extend `EnclaveSignRequest` with `policy_decision: SignedPolicyDecision` and `approvals: Vec<SignedApproval>` (additive fields); populate `Wallet.{max_value_cap, contract_allowlist, chain_allowlist}` as hard ceilings; EIF binary includes the invariant checker + signed-policy verifier. Without this, M3 ships a TEE that doesn't enforce the hybrid scheme. **v1.2 update:** the M3 skeleton PR (#16) shipped the `HybridVerifier` and `SignedPolicyDecision` as unit-tested library code (18 tests), with `EnclaveSignRequest.policy_decision` landed as `Option<_>` per [m3-decisions D21](m3-decisions.md#d21) for additive callsite compatibility. The closing piece is `PolicyServiceSigner` end-to-end wiring through `WalletService::sign` — the orchestrator currently passes `None`; the integration PR is the next milestone's first deliverable. See [m3-decisions D29](m3-decisions.md#d29) and retro-m3-m4 [§3.2](retro-m3-m4.md).
+- Live audit anchor cron (deferred from M2; M2 P2 shipped only the type shape — actual cron job + on-chain commit lands here, needs `qfc-core` dep and a funded operator account). **v1.2 update:** the M3 skeleton PR shipped `LocalFileAnchor` (file-backed signed JSONL submitter) per [m3-decisions D28](m3-decisions.md#d28); the on-chain submitter remains blocked on `qfc-core` workspace integration per retro-m1-m2 [§3.6](retro-m1-m2.md).
 - `S3KmsShareStore` with attestation-conditional KMS decrypt policy
 - Attestation verification library (`qfc-enclave::verify_attestation`) — anyone can pull this in to verify a QFC server wallet attestation
 - Public attestation verification page (static HTML on `attestation.qfc.network`) — takes attestation doc, returns "matches PCR0 X (rebuild yourself with `make verify-eif`)"
@@ -833,7 +834,7 @@ Each milestone is independently shippable: it produces a tagged release on the p
 **Ships:**
 - Approver registration: `POST /approvers`, identity types (chain account, external pubkey, hardware, nested wallet)
 - Approver sets: `POST /approver-sets`, ties approvers to wallets via policy
-- Approval request notification channels: webhook (M4 baseline), email, on-chain QFC event (for chain-account approvers)
+- Approval request notification channels: webhook (M4 baseline), email, on-chain QFC event (for chain-account approvers). **v1.2 update:** the M4 PR (#15) shipped `WebhookApprover` (HMAC-SHA256 per [m4-decisions D27](m4-decisions.md#d27)), `HardwareApproverNotifier`, and `OnChainQfcEventApprover` as a `tokio::broadcast` stub per [m4-decisions D28](m4-decisions.md#d28). Real on-chain submission is blocked on the same `qfc-core` workspace integration as the audit anchor cron above (retro-m1-m2 [§3.6](retro-m1-m2.md)). Email channel deferred (operator-side templating, not blocking M5).
 - Approval submission API: `POST /approvals/{request_id}` with signed approval payload
 - Quorum collection logic (concurrent listening, threshold detection, timeout handling)
 - Enclave-side approval verification (the enclave fetches approver public keys via attested config and verifies M signatures)
@@ -919,6 +920,22 @@ This is the closure that makes "open source TEE" mean something. Without reprodu
 - `cargo-deny`, `cargo-vet`, `cargo-audit` mandatory in CI
 - All cryptography-touching PRs require two reviewers
 - All `enclave/` PRs trigger a rebuild + PCR0 diff comment
+
+#### CI parity checklist for subagents (v1.2)
+
+Subagent briefs (parallel-worktree workflow per global instructions and retro-m3-m4 §4.3) must include the full CI parity gate before reporting green. The four `ci.yml` gates plus the three supply-chain gates:
+
+1. `cargo test --workspace --all-features` — full test suite
+2. `cargo clippy --workspace --all-targets --all-features -- -D warnings` — lint gate
+3. `cargo fmt --all -- --check` — formatting gate
+4. `cargo doc --workspace --no-deps --all-features` with `RUSTDOCFLAGS="-D warnings"` — rustdoc lint gate
+5. `cargo audit` with the in-tree ignore list (see §12.4)
+6. `cargo deny check` (advisories + bans + licenses + sources)
+7. `cargo vet --locked` (or `cargo vet diff` when adding deps)
+
+All seven gates must pass locally before a subagent declares done. The `clippy` + `rustdoc` gates are feature-set-sensitive — `--all-features` can flip latent warnings on (retro-m3-m4 [§4.5](retro-m3-m4.md)), so local checks must use the same feature flags as CI. On macOS dev where `vsock 0.4.0` does not compile, `--all-features` is exercised on CI's Linux runner instead.
+
+Subagents working in parallel worktrees off the same `main` must also flag any **workspace-shared type renames** in their plan (the M3+M4 retype of `PolicyDecision::RequireQuorum.approver_set` from `ApprovalId` to `ApproverSetId` produced a textually-clean rebase that failed `cargo check` — retro-m3-m4 [§4.4](retro-m3-m4.md)). The parent agent's pre-rebase planning step scans for cross-subagent type renaming.
 
 ---
 
@@ -1129,14 +1146,23 @@ Each `src/lib.rs` ships with:
 |------|----------|-------|
 | `ci.yml` | PR + push to main | `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace --all-features`, `cargo doc --no-deps` |
 | `deny.yml` | PR + nightly cron | `cargo deny --workspace check` (advisories + bans + licenses + sources) |
-| `audit.yml` | PR + nightly cron | `cargo audit --deny warnings` |
+| `audit.yml` | PR + nightly cron | `cargo audit --deny warnings --ignore <RUSTSEC-IDs>` — ignore list **must stay in sync** with `deny.toml [advisories].ignore` (v1.2). See note below |
 | `vet.yml` | PR | `cargo vet --locked` |
 | `sbom.yml` | release tag | `cargo cyclonedx -f json` for each binary, attached to release |
-| `msrv.yml` | weekly | Tests against the rustc version in `rust-toolchain.toml` AND latest stable; warn if latest stable breaks |
-| `coverage.yml` | PR (informational) | `cargo llvm-cov --workspace --lcov` uploaded to Codecov |
 | `eif-reproducibility.yml` | added in M3 | Two parallel builds, diff PCR0; fail if non-bit-exact |
 
-All workflows run on `ubuntu-latest`. macOS/Windows added when there's user demand.
+All workflows run on `ubuntu-latest`. macOS/Windows added when there's user demand. (The `msrv.yml` and `coverage.yml` rows from earlier drafts have been struck — those workflows are not currently in `.github/workflows/`; revisit at M3 GA when MSRV policy and coverage tooling are owned.)
+
+**v1.2 — `audit.yml` ignore list sync.** `cargo audit` and `cargo deny` consult separate config surfaces. Any advisory ignore added to `deny.toml [advisories].ignore` must also be added to the `audit.yml --ignore` invocation (and vice versa). The current ignores (as of v1.2):
+
+| Advisory | Crate | Why ignored |
+|---|---|---|
+| RUSTSEC-2025-0111 | `tokio-tar` (via `testcontainers`) | Dev-dep chain; not in production binary |
+| RUSTSEC-2025-0134 | `rustls-pemfile` unmaintained (via `testcontainers`) | Dev-dep chain; not in production binary |
+| RUSTSEC-2024-0370 | `syn` 1 (via `utoipa-swagger-ui` build-time macros) | Build-time only; not linked into production binary |
+| RUSTSEC-2023-0071 | `rsa` 0.9.10 Marvin attack (via `sqlx-macros-core` → `sqlx-mysql`) | `sqlx-macros-core` enables every backend at compile time for query verification; we only use Postgres at runtime, `sqlx-mysql` does not link in. Revisit when sqlx 0.9 scopes the build chain by backend |
+
+Retro-m3-m4 [§4.2](retro-m3-m4.md) records the surprise (the `sqlx-macros` build chain pulling MySQL deps even with `default-features = false` on Postgres-only call sites).
 
 Branch protection on `main`:
 - Require PR, 1 review (2 for `enclave/`, `qfc-sss/`, `qfc-enclave/`, `crates/*/src/crypto/`)
