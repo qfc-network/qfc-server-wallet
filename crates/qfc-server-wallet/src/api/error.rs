@@ -87,6 +87,7 @@ impl From<ServiceError> for ApiError {
             ServiceError::Store(e) => Self::Internal(format!("store: {e}")),
             ServiceError::Policy(e) => Self::Internal(format!("policy: {e}")),
             ServiceError::InsufficientShares(e) => Self::Internal(format!("shares: {e}")),
+            ServiceError::Internal(msg) => Self::Internal(msg),
         }
     }
 }

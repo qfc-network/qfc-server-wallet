@@ -10,9 +10,13 @@ use std::time::{Duration, Instant};
 
 use qfc_audit::{Actor, AuditEventDraft, AuditKind, AuditSink};
 use qfc_enclave::{
-    Enclave, EnclaveSignRequest, EnclaveSignResponse, GenerateWalletRequest, SigningContext,
+    hybrid_verifier::WalletCeilings, Enclave, EnclaveSignRequest, EnclaveSignResponse,
+    GenerateWalletRequest, SigningContext,
 };
-use qfc_policy::{Policy, PolicyDecision, SigningPayload, SigningRequest};
+use qfc_policy::{
+    Policy, PolicyDecision, PolicyServiceSigner, SignedPolicyDecision, SigningPayload,
+    SigningRequest,
+};
 use qfc_quorum::{
     ApprovalRequest, ApprovalStore, ApproverRegistry, QuorumApprover, RecordOutcome, SignedApproval,
 };
@@ -64,7 +68,21 @@ pub enum ServiceError {
     /// Could not assemble M shares (e.g. some shares missing).
     #[error("not enough shares available: {0}")]
     InsufficientShares(String),
+
+    /// Internal orchestrator failure (clock, signer backend, etc.). Surfaces
+    /// errors that don't fit the subsystem-specific buckets above.
+    #[error("internal: {0}")]
+    Internal(String),
 }
+
+/// Default freshness window the orchestrator passes to a
+/// `PolicyServiceSigner`. 60 seconds is long enough to absorb normal
+/// network + scheduler latency between policy evaluation and the enclave
+/// call, but tight enough to bound replay value if a signed decision
+/// ever leaks. The in-enclave verifier also caps with
+/// `MAX_DECISION_AGE_SECS = 24h`, so misconfigured callers cannot bypass
+/// the hard ceiling. See `docs/m3-decisions.md` D33.
+pub const MAX_DECISION_AGE_SECS_DEFAULT: u32 = 60;
 
 /// Top-level orchestrator. Holds the dependency tree as `Arc`s so it is
 /// cheap to clone for parallel request handling.
@@ -81,6 +99,14 @@ pub struct WalletService {
     pub(crate) approval_store: Arc<dyn ApprovalStore>,
     pub(crate) wallets: Arc<RwLock<HashMap<WalletId, WalletRecord>>>,
     pub(crate) quorum_timeout: Duration,
+    /// Optional signer that converts a `PolicyDecision` into a
+    /// `SignedPolicyDecision` for in-enclave hybrid re-verification (M3
+    /// §3.4). `None` by default — preserves M1/M2 behavior where the
+    /// orchestrator passes `policy_decision: None` to the enclave.
+    /// Production deployments MUST opt in via
+    /// [`WalletService::with_policy_service_signer`]. See
+    /// `docs/m3-decisions.md` D34.
+    pub(crate) policy_service_signer: Option<Arc<dyn PolicyServiceSigner>>,
 }
 
 impl WalletService {
@@ -108,7 +134,22 @@ impl WalletService {
             approval_store: Arc::new(qfc_quorum::MemoryApprovalStore::new()),
             wallets: Arc::new(RwLock::new(HashMap::new())),
             quorum_timeout: Duration::from_secs(120),
+            policy_service_signer: None,
         }
+    }
+
+    /// Wire in a policy-service signer. When configured, every
+    /// `WalletService::sign` call that produces an `Allow` or
+    /// `RequireQuorum` decision threads a `SignedPolicyDecision` into the
+    /// enclave so the in-enclave hybrid verifier can re-check it.
+    ///
+    /// Builder-style and opt-in by design — see `docs/m3-decisions.md`
+    /// D34. M1/M2 tests / dev setups don't have to wire a signer; M3+
+    /// production deployments MUST.
+    #[must_use]
+    pub fn with_policy_service_signer(mut self, signer: Arc<dyn PolicyServiceSigner>) -> Self {
+        self.policy_service_signer = Some(signer);
+        self
     }
 
     /// Override the approver registry. Useful for swapping to
@@ -439,14 +480,47 @@ impl WalletService {
                         }),
                     })
                     .await?;
-                // TODO(M3): pass `approvals` and the `PolicyDecision` into
-                // EnclaveSignRequest so the enclave re-verifies the hybrid
-                // policy invariants (see retro-m1-m2 §3.4). Today the
-                // orchestrator trusts the host count; with the M3 Nitro
-                // backend this becomes load-bearing.
             }
             PolicyDecision::Allow { .. } => {}
         }
+
+        // 2a. M3 §3.4: if a policy-service signer is wired, package the
+        // decision into a `SignedPolicyDecision` and emit
+        // `PolicyDecisionSigned`. The signed bundle goes into
+        // `EnclaveSignRequest.policy_decision` so the in-enclave hybrid
+        // verifier re-checks it before any SSS combine or curve sign.
+        let signed_policy_decision: Option<SignedPolicyDecision> = match &self.policy_service_signer
+        {
+            Some(pol_signer) => {
+                let bundle = pol_signer
+                    .sign_decision(
+                        decision.clone(),
+                        request_id,
+                        wallet_id,
+                        MAX_DECISION_AGE_SECS_DEFAULT,
+                    )
+                    .await
+                    .map_err(|e| ServiceError::Internal(format!("policy signer: {e}")))?;
+                self.audit
+                    .emit(AuditEventDraft {
+                        actor: Actor::System,
+                        kind: AuditKind::PolicyDecisionSigned,
+                        request_id: Some(request_id),
+                        wallet_id: Some(wallet_id),
+                        details: json!({
+                            "decision_id": decision.decision_id(),
+                            "signer_pubkey_fingerprint_hex": hex_encode(
+                                &sha256_32(pol_signer.public_key())[..16],
+                            ),
+                            "signed_at_unix_ms": bundle.signed_at_unix_ms,
+                            "max_age_secs": bundle.max_age_secs,
+                        }),
+                    })
+                    .await?;
+                Some(bundle)
+            }
+            None => None,
+        };
 
         // 3. Fetch shares.
         let stored_shares = self.fetch_shares(&wallet, wallet.config.threshold).await?;
@@ -465,14 +539,23 @@ impl WalletService {
             .await?;
 
         // M3 hybrid scheme additive fields. The orchestrator threads through:
-        //   - `policy_decision: None` for M3 skeleton; the in-enclave hybrid
-        //     verifier is exercised in unit tests directly. A future PR
-        //     introduces a dedicated `PolicyServiceSigner` that wraps
-        //     `decision` into a `SignedPolicyDecision` here.
-        //   - `approvals: Vec::new()` until M4 wires quorum →
-        //     `EnclaveApproval` conversion at this layer. The
-        //     `MockEnclave` ignores both; `NitroEnclave` (the boot binary)
-        //     enforces them.
+        //   - `policy_decision`: produced by `policy_service_signer` when
+        //     wired; `None` for legacy callers. The `MockEnclave`
+        //     configured with a pinned policy-service public key runs the
+        //     hybrid verifier; otherwise it falls through (back-compat).
+        //   - `wallet_ceilings`: projected from `WalletConfig`. The
+        //     verifier re-checks these against the structured payload.
+        //   - `policy_signing_payload`: the structured payload so the
+        //     verifier can decode chain_id / target / value without
+        //     trusting host-side decoding.
+        //   - `approvals: Vec::new()` until M4 quorum → EnclaveApproval
+        //     conversion lands at this layer.
+        let wallet_ceilings = WalletCeilings {
+            wallet_id,
+            max_value_per_tx: wallet.config.max_value_per_tx,
+            contract_allowlist: wallet.config.contract_allowlist.clone(),
+            chain_allowlist: wallet.config.chain_allowlist.clone(),
+        };
         let resp = self
             .enclave
             .sign_in_enclave(EnclaveSignRequest {
@@ -484,8 +567,10 @@ impl WalletService {
                 message,
                 hash_alg,
                 context,
-                policy_decision: None,
+                policy_decision: signed_policy_decision,
                 approvals: Vec::new(),
+                wallet_ceilings: Some(wallet_ceilings),
+                policy_signing_payload: Some(payload.clone()),
             })
             .await;
 

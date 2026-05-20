@@ -61,3 +61,7 @@ time.workspace = true
 hyper.workspace = true
 http-body-util.workspace = true
 tower.workspace = true
+# Used by the M3 follow-up policy-service signer E2E tests (encoding EVM
+# transactions to exercise the value-cap hard ceiling).
+alloy-rlp.workspace = true
+async-trait.workspace = true

@@ -47,6 +47,11 @@ pub enum AuditKind {
     QuorumTimedOut,
     /// Quorum collected the required number of approvals (`threshold` met).
     QuorumThresholdReached,
+    /// A `SignedPolicyDecision` was produced by the policy-service signer
+    /// (M3 §3.4 hybrid scheme). Logged immediately before the
+    /// `SigningAttempted` event so timelines show "decision signed →
+    /// enclave invoked".
+    PolicyDecisionSigned,
     /// The enclave was asked to sign.
     SigningAttempted,
     /// The signing call succeeded.
@@ -134,6 +139,7 @@ pub const fn kind_byte(k: AuditKind) -> u8 {
         AuditKind::SystemError => 14,
         AuditKind::EnclaveAttested => 15,
         AuditKind::QuorumThresholdReached => 16,
+        AuditKind::PolicyDecisionSigned => 17,
     }
 }
 

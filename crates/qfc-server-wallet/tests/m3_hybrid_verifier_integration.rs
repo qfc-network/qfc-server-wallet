@@ -177,6 +177,8 @@ fn enclave_sign_request_keeps_m1_callers_compiling() {
         context: SigningContext::default(),
         policy_decision: None,
         approvals: Vec::new(),
+        wallet_ceilings: None,
+        policy_signing_payload: None,
     };
     let _ = req;
 }

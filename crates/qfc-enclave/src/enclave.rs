@@ -180,6 +180,17 @@ pub struct EnclaveSignRequest {
     pub policy_decision: Option<SignedPolicyDecision>,
     /// Quorum approvals collected upstream (in-enclave re-verified).
     pub approvals: Vec<EnclaveApproval>,
+    /// Hard ceilings projected from the wallet record. `None` means the
+    /// orchestrator did not project them (M1/M2 callers); the hybrid
+    /// verifier then falls back to default empty ceilings (no constraint).
+    /// M3 follow-up: production callers MUST populate this.
+    pub wallet_ceilings: Option<crate::hybrid_verifier::WalletCeilings>,
+    /// Original `qfc_policy::SigningPayload` the orchestrator built — needed
+    /// by the in-enclave hybrid verifier to re-check chain / target / value
+    /// ceilings against the structured payload (the raw `message` field is
+    /// the bytes the signer signs, which is *derived* from the payload but
+    /// not the payload itself for VM transactions).
+    pub policy_signing_payload: Option<qfc_policy::SigningPayload>,
 }
 
 /// Output of `Enclave::sign_in_enclave`.

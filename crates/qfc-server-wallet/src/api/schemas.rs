@@ -140,6 +140,7 @@ pub enum AuditKindDto {
     ApproverSetChanged,
     SystemError,
     EnclaveAttested,
+    PolicyDecisionSigned,
 }
 
 impl From<AuditKind> for AuditKindDto {
@@ -161,6 +162,7 @@ impl From<AuditKind> for AuditKindDto {
             AuditKind::ApproverSetChanged => Self::ApproverSetChanged,
             AuditKind::SystemError => Self::SystemError,
             AuditKind::EnclaveAttested => Self::EnclaveAttested,
+            AuditKind::PolicyDecisionSigned => Self::PolicyDecisionSigned,
         }
     }
 }
