@@ -15,8 +15,10 @@
 #![warn(clippy::pedantic)]
 #![allow(clippy::module_name_repetitions)]
 
+pub mod api;
 pub mod service;
 pub mod wallet;
 
+pub use api::{router, AppState};
 pub use service::{ServiceError, WalletService};
-pub use wallet::{WalletConfig, WalletRecord};
+pub use wallet::{WalletConfig, WalletRecord, WalletStatus};

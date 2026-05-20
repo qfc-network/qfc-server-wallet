@@ -14,8 +14,10 @@ allow = [
     "CC0-1.0",
     "Zlib",
     "MPL-2.0",
-    # Permissive — used by webpki-roots (transitive via sqlx → rustls).
-    # CDLA-Permissive is data-license-style permissive, not copyleft.
+    # `webpki-roots` ships under CDLA-Permissive-2.0. Permissive,
+    # data-license-style (no copyleft, no patent-trap). Pulled in
+    # transitively via sqlx → rustls (M2 P2) and hyper-rustls →
+    # reqwest (M2 P1).
     "CDLA-Permissive-2.0",
 ]
 confidence-threshold = 0.93
@@ -36,13 +38,15 @@ deny = [
 db-urls = ["https://github.com/rustsec/advisory-db"]
 yanked = "deny"
 ignore = [
-    # Both advisories below ride in via `testcontainers` → `bollard` and are
-    # *dev-dependency-only* (gated `#[ignore]` Postgres integration tests in
-    # `qfc-audit`). They are never linked into production binaries. Revisit
-    # when `testcontainers` adopts a maintained replacement (astral-tokio-tar
-    # for tokio-tar, rustls-pki-types for rustls-pemfile).
+    # The three advisories below ride in via dev-dependency chains and
+    # are never linked into production binaries.
+    # testcontainers → bollard: gated `#[ignore]` Postgres integration
+    # tests in qfc-audit. Revisit when testcontainers adopts a maintained
+    # replacement (astral-tokio-tar; rustls-pki-types).
     "RUSTSEC-2025-0111", # tokio-tar PAX header parsing — testcontainers chain
     "RUSTSEC-2025-0134", # rustls-pemfile unmaintained — testcontainers chain
+    # utoipa-swagger-ui's syn-1 macro chain. Build-time only.
+    "RUSTSEC-2024-0370",
 ]
 
 [sources]

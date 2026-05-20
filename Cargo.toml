@@ -83,12 +83,22 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 # Postgres (used by qfc-audit M2)
 sqlx = { version = "0.8", default-features = false, features = ["postgres", "runtime-tokio-rustls", "macros", "migrate", "chrono"] }
 
+# HTTP / API surface (M2 P1)
+axum = { version = "0.7", features = ["json", "macros"] }
+http = "1"
+tower = "0.5"
+tower-http = { version = "0.5", features = ["trace", "cors"] }
+utoipa = { version = "4", features = ["axum_extras"] }
+utoipa-swagger-ui = { version = "7", features = ["axum"] }
+
 # Testing
 proptest = "1.5"
 tokio-test = "0.4"
 tempfile = "3.10"
 testcontainers = "0.23"
 testcontainers-modules = { version = "0.11", features = ["postgres"] }
+hyper = { version = "1", features = ["full"] }
+http-body-util = "0.1"
 
 [profile.release]
 opt-level = 3

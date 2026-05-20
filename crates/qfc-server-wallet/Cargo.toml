@@ -26,7 +26,7 @@ qfc-policy = { path = "../qfc-policy", version = "0.0.0" }
 qfc-quorum = { path = "../qfc-quorum", version = "0.0.0" }
 qfc-audit = { path = "../qfc-audit", version = "0.0.0" }
 
-tokio = { workspace = true, features = ["sync", "rt-multi-thread", "macros"] }
+tokio = { workspace = true, features = ["sync", "rt-multi-thread", "macros", "signal"] }
 async-trait.workspace = true
 thiserror.workspace = true
 anyhow.workspace = true
@@ -37,8 +37,21 @@ tracing-subscriber.workspace = true
 time.workspace = true
 sha2.workspace = true
 
+# HTTP / API surface (M2 P1)
+axum.workspace = true
+http.workspace = true
+tower.workspace = true
+tower-http.workspace = true
+utoipa.workspace = true
+utoipa-swagger-ui.workspace = true
+subtle.workspace = true
+hex.workspace = true
+
 [dev-dependencies]
 tempfile.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 ed25519-dalek.workspace = true
 time.workspace = true
+hyper.workspace = true
+http-body-util.workspace = true
+tower.workspace = true
