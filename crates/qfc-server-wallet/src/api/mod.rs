@@ -65,6 +65,23 @@ pub fn router(state: AppState) -> Router {
         .route("/wallets/:id", get(handlers::get_wallet))
         .route("/wallets/:id/sign", post(handlers::sign))
         .route("/audit/events", get(handlers::list_audit_events))
+        .route(
+            "/approvers",
+            post(handlers::create_approver).get(handlers::list_approvers),
+        )
+        .route(
+            "/approvers/:id",
+            get(handlers::get_approver).delete(handlers::revoke_approver),
+        )
+        .route(
+            "/approver-sets",
+            post(handlers::create_approver_set).get(handlers::list_approver_sets),
+        )
+        .route("/approver-sets/:id", get(handlers::get_approver_set))
+        .route(
+            "/requests/:request_id/approvals",
+            post(handlers::submit_approval).get(handlers::list_approvals),
+        )
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             auth::require_api_key,

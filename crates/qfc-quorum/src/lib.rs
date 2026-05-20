@@ -14,12 +14,29 @@
 
 pub mod approval;
 pub mod approver;
+pub mod approvers;
 pub mod identity;
 pub mod mock;
+pub mod registry;
+pub mod store;
 
 pub use approval::{
     ApprovalDecision, ApprovalRequest, ApprovalVerifyError, SignedApproval, MAX_APPROVAL_AGE_SECS,
 };
 pub use approver::{QuorumApprover, QuorumError};
+pub use approvers::{
+    ApproverNotifier, HardwareApproverNotifier, OnChainEvent, OnChainQfcEventApprover,
+    OrchestratingApprover, OrchestratingApproverBuilder, WebhookApprover, WebhookApproverConfig,
+    WebhookSignatureHeader,
+};
 pub use identity::{ApproverIdentity, HardwareApproverHandle};
 pub use mock::MockQuorumApprover;
+pub use registry::{
+    ApproverCreate, ApproverRecord, ApproverRegistry, ApproverSet, ApproverSetCreate,
+    ApproverStatus, MemoryApproverRegistry, PostgresApproverRegistry, RegistryError,
+    MAX_NESTING_DEPTH, REGISTRY_MIGRATOR,
+};
+pub use store::{
+    ApprovalStore, MemoryApprovalStore, PostgresApprovalStore, RecordOutcome,
+    StoreError as ApprovalStoreError,
+};

@@ -103,6 +103,19 @@ ulid_newtype!(
     PolicyId
 );
 
+ulid_newtype!(
+    /// Identifier for an approver set (M-of-N quorum group). See RFC §2.5
+    /// and `qfc-quorum::registry::ApproverSet`. Distinct from `ApprovalId`
+    /// which identifies an individual signed approval action.
+    ApproverSetId
+);
+
+ulid_newtype!(
+    /// Identifier for an approver record (an individual person/key) inside
+    /// the approver registry. See RFC §2.5.
+    ApproverId
+);
+
 /// Identifier for a single Shamir share within a wallet's share set.
 ///
 /// `ShareId` is *not* a ULID. It is structurally `(wallet_id, index)` so that

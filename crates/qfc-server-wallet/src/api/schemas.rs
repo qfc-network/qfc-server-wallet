@@ -15,7 +15,14 @@
 use qfc_audit::{AuditEvent, AuditKind};
 use qfc_enclave::SigningContext;
 use qfc_policy::{Requester, SigningPayload, VmType};
-use qfc_wallet_types::{HashAlg, HdPath, OwnerId, PolicyId, SigningScheme, WalletId};
+use qfc_quorum::{
+    ApprovalDecision, ApproverIdentity, ApproverRecord, ApproverSet, ApproverStatus,
+    HardwareApproverHandle, SignedApproval,
+};
+use qfc_wallet_types::{
+    ApprovalId, ApproverId, ApproverSetId, HashAlg, HdPath, OwnerId, PolicyId, RequestId,
+    SigningScheme, WalletId,
+};
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 
@@ -125,6 +132,7 @@ pub enum AuditKindDto {
     QuorumApprovalReceived,
     QuorumApprovalRejected,
     QuorumTimedOut,
+    QuorumThresholdReached,
     SigningAttempted,
     SigningSucceeded,
     SigningFailed,
@@ -145,6 +153,7 @@ impl From<AuditKind> for AuditKindDto {
             AuditKind::QuorumApprovalReceived => Self::QuorumApprovalReceived,
             AuditKind::QuorumApprovalRejected => Self::QuorumApprovalRejected,
             AuditKind::QuorumTimedOut => Self::QuorumTimedOut,
+            AuditKind::QuorumThresholdReached => Self::QuorumThresholdReached,
             AuditKind::SigningAttempted => Self::SigningAttempted,
             AuditKind::SigningSucceeded => Self::SigningSucceeded,
             AuditKind::SigningFailed => Self::SigningFailed,
@@ -525,3 +534,463 @@ impl From<AuditEvent> for AuditEventView {
         }
     }
 }
+
+// =============================================================================
+// M4: approver registry + approval submission DTOs
+// =============================================================================
+
+/// Approver-identity payload — wire shape mirroring `ApproverIdentity` with
+/// hex-encoded byte fields. All four RFC §2.5 variants surface.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ApproverIdentityDto {
+    /// QFC on-chain account.
+    Chain {
+        /// Chain id.
+        chain_id: u64,
+        /// Hex-encoded chain address (20 bytes for QFC chains).
+        address_hex: String,
+        /// Hex-encoded public key.
+        public_key_hex: String,
+        /// Curve.
+        scheme: SigningSchemeDto,
+    },
+    /// Externally-registered raw public key.
+    External {
+        /// Stable identifier (audit anchor; distinct from the pubkey).
+        id: String,
+        /// Hex-encoded public key.
+        public_key_hex: String,
+        /// Curve.
+        scheme: SigningSchemeDto,
+    },
+    /// Hardware-token-backed identity.
+    Hardware {
+        /// Stable handle (e.g. "yubikey:slot9c").
+        handle: String,
+        /// Hex-encoded public key.
+        public_key_hex: String,
+        /// Curve the device signs with.
+        scheme: SigningSchemeDto,
+    },
+    /// Nested server wallet (treasury-of-treasuries).
+    NestedWallet {
+        /// Nested wallet ULID.
+        wallet_id: String,
+        /// Hex-encoded master public key.
+        public_key_hex: String,
+        /// Curve.
+        scheme: SigningSchemeDto,
+    },
+}
+
+impl ApproverIdentityDto {
+    /// Lower to the domain `ApproverIdentity`.
+    ///
+    /// # Errors
+    ///
+    /// `ApiError::BadRequest` on any malformed hex / ULID field.
+    pub fn into_domain(self) -> Result<ApproverIdentity, ApiError> {
+        Ok(match self {
+            Self::Chain {
+                chain_id,
+                address_hex,
+                public_key_hex,
+                scheme,
+            } => ApproverIdentity::Chain {
+                chain_id,
+                address: hex::decode(&address_hex)
+                    .map_err(|e| ApiError::BadRequest(format!("invalid address_hex: {e}")))?,
+                public_key: hex::decode(&public_key_hex)
+                    .map_err(|e| ApiError::BadRequest(format!("invalid public_key_hex: {e}")))?,
+                scheme: scheme.into(),
+            },
+            Self::External {
+                id,
+                public_key_hex,
+                scheme,
+            } => ApproverIdentity::External {
+                id,
+                public_key: hex::decode(&public_key_hex)
+                    .map_err(|e| ApiError::BadRequest(format!("invalid public_key_hex: {e}")))?,
+                scheme: scheme.into(),
+            },
+            Self::Hardware {
+                handle,
+                public_key_hex,
+                scheme,
+            } => ApproverIdentity::Hardware(HardwareApproverHandle {
+                handle,
+                public_key: hex::decode(&public_key_hex)
+                    .map_err(|e| ApiError::BadRequest(format!("invalid public_key_hex: {e}")))?,
+                scheme: scheme.into(),
+            }),
+            Self::NestedWallet {
+                wallet_id,
+                public_key_hex,
+                scheme,
+            } => ApproverIdentity::NestedWallet {
+                wallet_id: wallet_id
+                    .parse::<WalletId>()
+                    .map_err(|e| ApiError::BadRequest(format!("invalid wallet_id: {e}")))?,
+                public_key: hex::decode(&public_key_hex)
+                    .map_err(|e| ApiError::BadRequest(format!("invalid public_key_hex: {e}")))?,
+                scheme: scheme.into(),
+            },
+        })
+    }
+}
+
+impl From<ApproverIdentity> for ApproverIdentityDto {
+    fn from(i: ApproverIdentity) -> Self {
+        match i {
+            ApproverIdentity::Chain {
+                chain_id,
+                address,
+                public_key,
+                scheme,
+            } => Self::Chain {
+                chain_id,
+                address_hex: hex::encode(address),
+                public_key_hex: hex::encode(public_key),
+                scheme: scheme.into(),
+            },
+            ApproverIdentity::External {
+                id,
+                public_key,
+                scheme,
+            } => Self::External {
+                id,
+                public_key_hex: hex::encode(public_key),
+                scheme: scheme.into(),
+            },
+            ApproverIdentity::Hardware(h) => Self::Hardware {
+                handle: h.handle,
+                public_key_hex: hex::encode(h.public_key),
+                scheme: h.scheme.into(),
+            },
+            ApproverIdentity::NestedWallet {
+                wallet_id,
+                public_key,
+                scheme,
+            } => Self::NestedWallet {
+                wallet_id: wallet_id.to_string(),
+                public_key_hex: hex::encode(public_key),
+                scheme: scheme.into(),
+            },
+        }
+    }
+}
+
+/// OpenAPI mirror of `qfc_quorum::ApproverStatus`.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+#[allow(missing_docs)]
+pub enum ApproverStatusDto {
+    Active,
+    Revoked,
+}
+
+impl From<ApproverStatus> for ApproverStatusDto {
+    fn from(s: ApproverStatus) -> Self {
+        match s {
+            ApproverStatus::Active => Self::Active,
+            ApproverStatus::Revoked => Self::Revoked,
+        }
+    }
+}
+
+/// `POST /approvers` body.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct CreateApproverRequest {
+    /// Approver identity payload.
+    pub identity: ApproverIdentityDto,
+    /// Operator-facing label.
+    #[schema(example = "alice@treasury")]
+    pub label: String,
+    /// Owning tenant.
+    #[schema(example = "tenant-alpha")]
+    pub owner_id: String,
+    /// Optional webhook URL for notifications.
+    pub webhook_url: Option<String>,
+}
+
+/// JSON view of an `ApproverRecord`.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ApproverView {
+    /// ULID.
+    pub approver_id: String,
+    /// Identity payload.
+    pub identity: ApproverIdentityDto,
+    /// Curve.
+    pub scheme: SigningSchemeDto,
+    /// Operator label.
+    pub label: String,
+    /// Owning tenant.
+    pub owner_id: String,
+    /// Optional webhook URL.
+    pub webhook_url: Option<String>,
+    /// Lifecycle status.
+    pub status: ApproverStatusDto,
+    /// Registration timestamp.
+    pub added_at_unix_ms: i64,
+}
+
+impl From<ApproverRecord> for ApproverView {
+    fn from(r: ApproverRecord) -> Self {
+        Self {
+            approver_id: r.approver_id.to_string(),
+            identity: r.identity.into(),
+            scheme: r.scheme.into(),
+            label: r.label,
+            owner_id: r.owner_id.to_string(),
+            webhook_url: r.webhook_url,
+            status: r.status.into(),
+            added_at_unix_ms: r.added_at_unix_ms,
+        }
+    }
+}
+
+/// `POST /approver-sets` body.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct CreateApproverSetRequest {
+    /// Human-readable set name.
+    #[schema(example = "treasury-keyholders")]
+    pub name: String,
+    /// Owning tenant.
+    #[schema(example = "tenant-alpha")]
+    pub owner_id: String,
+    /// Member approver ULIDs.
+    pub members: Vec<String>,
+    /// Minimum approvals.
+    #[schema(example = 2, minimum = 1)]
+    pub threshold: u8,
+    /// Total members. Must equal `members.len()`.
+    #[schema(example = 3, minimum = 1)]
+    pub total: u8,
+    /// Optional per-set quorum-collection timeout (seconds).
+    pub quorum_timeout_secs: Option<u32>,
+}
+
+impl CreateApproverSetRequest {
+    /// Lower to the domain `ApproverSetCreate`.
+    ///
+    /// # Errors
+    ///
+    /// `ApiError::BadRequest` on any malformed ULID.
+    pub fn into_domain(self) -> Result<qfc_quorum::ApproverSetCreate, ApiError> {
+        let mut members = Vec::with_capacity(self.members.len());
+        for m in &self.members {
+            members.push(
+                m.parse::<ApproverId>()
+                    .map_err(|e| ApiError::BadRequest(format!("invalid approver_id: {e}")))?,
+            );
+        }
+        Ok(qfc_quorum::ApproverSetCreate {
+            name: self.name,
+            owner_id: OwnerId::new(self.owner_id),
+            members,
+            threshold: self.threshold,
+            total: self.total,
+            quorum_timeout_secs: self.quorum_timeout_secs,
+        })
+    }
+}
+
+/// JSON view of an `ApproverSet`.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ApproverSetView {
+    /// ULID.
+    pub approver_set_id: String,
+    /// Set name.
+    pub name: String,
+    /// Owning tenant.
+    pub owner_id: String,
+    /// Member ULIDs.
+    pub members: Vec<String>,
+    /// Threshold.
+    pub threshold: u8,
+    /// Total.
+    pub total: u8,
+    /// Optional timeout.
+    pub quorum_timeout_secs: Option<u32>,
+    /// Creation timestamp.
+    pub created_at_unix_ms: i64,
+}
+
+impl From<ApproverSet> for ApproverSetView {
+    fn from(s: ApproverSet) -> Self {
+        Self {
+            approver_set_id: s.id.to_string(),
+            name: s.name,
+            owner_id: s.owner_id.to_string(),
+            members: s.members.iter().map(ToString::to_string).collect(),
+            threshold: s.threshold,
+            total: s.total,
+            quorum_timeout_secs: s.quorum_timeout_secs,
+            created_at_unix_ms: s.created_at_unix_ms,
+        }
+    }
+}
+
+/// OpenAPI mirror of `qfc_quorum::ApprovalDecision`.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+#[allow(missing_docs)]
+pub enum ApprovalDecisionDto {
+    Approve,
+    Reject,
+}
+
+impl From<ApprovalDecisionDto> for ApprovalDecision {
+    fn from(d: ApprovalDecisionDto) -> Self {
+        match d {
+            ApprovalDecisionDto::Approve => Self::Approve,
+            ApprovalDecisionDto::Reject => Self::Reject,
+        }
+    }
+}
+
+impl From<ApprovalDecision> for ApprovalDecisionDto {
+    fn from(d: ApprovalDecision) -> Self {
+        match d {
+            ApprovalDecision::Approve => Self::Approve,
+            ApprovalDecision::Reject => Self::Reject,
+        }
+    }
+}
+
+/// `POST /requests/{request_id}/approvals` body.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct SubmitApprovalRequest {
+    /// ULID of the registered approver issuing this decision.
+    pub approver_id: String,
+    /// ULID of this approval action (echoed back; allows idempotent
+    /// re-submission of the same payload).
+    pub approval_id: String,
+    /// Approve or reject.
+    pub decision: ApprovalDecisionDto,
+    /// Hex-encoded signature over the canonical preimage. See
+    /// `SignedApproval::signing_preimage`.
+    pub signature_hex: String,
+    /// Unix-millisecond timestamp the approver signed at.
+    pub timestamp_unix_ms: i64,
+    /// Hex-encoded message hash the approval binds to (32 bytes).
+    pub message_hash_hex: String,
+    /// The approver identity as a redundant cross-check; server validates
+    /// it matches the registered identity for `approver_id`.
+    pub identity: ApproverIdentityDto,
+}
+
+/// `POST /requests/{request_id}/approvals` response body.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct SubmitApprovalResponse {
+    /// `true` when newly persisted, `false` when this was an idempotent
+    /// resubmission of an already-recorded payload.
+    pub recorded: bool,
+    /// Echo of the approval id.
+    pub approval_id: String,
+}
+
+/// JSON view of a stored `SignedApproval`.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ApprovalView {
+    /// ULID.
+    pub approval_id: String,
+    /// Request id.
+    pub request_id: String,
+    /// Approver identity.
+    pub approver: ApproverIdentityDto,
+    /// Stable identity key (audit anchor; matches `ApproverIdentity::key()`).
+    pub approver_key: String,
+    /// Approve / Reject.
+    pub decision: ApprovalDecisionDto,
+    /// Hex-encoded message hash (32 bytes).
+    pub message_hash_hex: String,
+    /// Approver signing timestamp.
+    pub timestamp_unix_ms: i64,
+    /// Hex-encoded signature.
+    pub signature_hex: String,
+}
+
+impl From<SignedApproval> for ApprovalView {
+    fn from(a: SignedApproval) -> Self {
+        Self {
+            approval_id: a.approval_id.to_string(),
+            request_id: a.request_id.to_string(),
+            approver_key: a.approver.key(),
+            approver: a.approver.into(),
+            decision: a.decision.into(),
+            message_hash_hex: hex::encode(a.message_hash),
+            timestamp_unix_ms: a.timestamp_unix_ms,
+            signature_hex: hex::encode(&a.signature),
+        }
+    }
+}
+
+impl SubmitApprovalRequest {
+    /// Lower to a domain `SignedApproval` + the claimed `ApproverId`. The
+    /// claimed `ApproverId` is the registered approver record id (separate
+    /// from `ApproverIdentity::key()` which is a derived audit string).
+    ///
+    /// # Errors
+    ///
+    /// `ApiError::BadRequest` on malformed hex / ULID.
+    pub fn into_signed(
+        self,
+        request_id: RequestId,
+    ) -> Result<(SignedApproval, ApproverId), ApiError> {
+        let approver_id = self
+            .approver_id
+            .parse::<ApproverId>()
+            .map_err(|e| ApiError::BadRequest(format!("invalid approver_id: {e}")))?;
+        let approval_id = self
+            .approval_id
+            .parse::<ApprovalId>()
+            .map_err(|e| ApiError::BadRequest(format!("invalid approval_id: {e}")))?;
+        let signature = hex::decode(&self.signature_hex)
+            .map_err(|e| ApiError::BadRequest(format!("invalid signature_hex: {e}")))?;
+        let msg = hex::decode(&self.message_hash_hex)
+            .map_err(|e| ApiError::BadRequest(format!("invalid message_hash_hex: {e}")))?;
+        let message_hash: [u8; 32] = msg
+            .as_slice()
+            .try_into()
+            .map_err(|_| ApiError::BadRequest("message_hash_hex must be 32 bytes".into()))?;
+        let identity = self.identity.into_domain()?;
+        Ok((
+            SignedApproval {
+                approval_id,
+                approver: identity,
+                request_id,
+                message_hash,
+                decision: self.decision.into(),
+                timestamp_unix_ms: self.timestamp_unix_ms,
+                signature,
+            },
+            approver_id,
+        ))
+    }
+}
+
+/// Query string for `GET /approvers?owner=tenant-alpha`.
+#[derive(Debug, Clone, Default, Deserialize, ToSchema, IntoParams)]
+pub struct ListApproversQuery {
+    /// Owning tenant filter (required).
+    pub owner: String,
+    /// Include revoked approvers (default false).
+    pub include_revoked: Option<bool>,
+}
+
+/// Query string for `GET /approver-sets?owner=tenant-alpha`.
+#[derive(Debug, Clone, Default, Deserialize, ToSchema, IntoParams)]
+pub struct ListApproverSetsQuery {
+    /// Owning tenant filter (required).
+    pub owner: String,
+}
+
+// Silence unused-import warnings if anyone references these without using
+// every type.
+#[allow(dead_code)]
+fn _force_use(_p: PolicyId, _h: HashAlg, _hp: HdPath, _s: SigningPayload, _v: VmType) {}
+#[allow(dead_code)]
+fn _force_use_set(_a: ApproverSetId) {}
