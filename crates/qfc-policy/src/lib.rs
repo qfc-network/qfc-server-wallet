@@ -14,10 +14,18 @@
 
 pub mod decision;
 pub mod policy;
+pub mod rate_limit;
 pub mod request;
+pub mod rule_set_policy;
+pub mod rules;
 pub mod static_policy;
+pub mod vm;
 
-pub use decision::{DenyReason, PolicyDecision, PolicyError, RuleHit};
+pub use decision::{DenyReason, PolicyDecision, PolicyError, RuleEffect, RuleHit};
 pub use policy::Policy;
+pub use rate_limit::{Clock, ManualClock, SystemClock, TokenBucketLimiter};
 pub use request::{Requester, SigningPayload, SigningRequest, VmType};
+pub use rule_set_policy::RuleSetPolicy;
+pub use rules::{QuorumTrigger, RateLimitScope, Rule, RuleSet, VmShapeConstraints};
 pub use static_policy::{AllowDefault, StaticAllowDenyPolicy};
+pub use vm::{DecodedTx, VmDecoder};

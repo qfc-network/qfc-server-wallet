@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "policy_id": "01KS0AGXHNCJ7YKWHXXDJKXY7W",
+  "default": "deny",
+  "rules": [
+    {
+      "kind": "allow_chain",
+      "chain_ids": [9001, 1]
+    },
+    {
+      "kind": "deny_chain",
+      "chain_ids": [31337]
+    },
+    {
+      "kind": "rate_limit",
+      "tokens": 5,
+      "refill_per_secs": 12,
+      "scope": "per_wallet_requester"
+    },
+    {
+      "kind": "time_window",
+      "weekday_mask": 31,
+      "hour_utc_start": 0,
+      "hour_utc_end": 24
+    },
+    {
+      "kind": "require_quorum",
+      "threshold": 3,
+      "total": 5,
+      "approver_set": "01KS0AGXHNCZT3VHDVPZBCAACG",
+      "trigger": {
+        "kind": "value_gte",
+        "chain_id": 9001,
+        "value": "1000000000000000000000"
+      }
+    }
+  ]
+}
