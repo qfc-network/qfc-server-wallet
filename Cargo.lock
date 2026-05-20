@@ -2464,10 +2464,13 @@ version = "0.0.0"
 dependencies = [
  "alloy-rlp",
  "async-trait",
+ "ed25519-dalek",
  "hex",
  "primitive-types",
  "proptest",
  "qfc-wallet-types",
+ "rand 0.8.6",
+ "rand_core 0.6.4",
  "serde",
  "serde_bytes",
  "serde_json",
@@ -2506,6 +2509,7 @@ dependencies = [
 name = "qfc-server-wallet"
 version = "0.0.0"
 dependencies = [
+ "alloy-rlp",
  "anyhow",
  "async-trait",
  "axum",

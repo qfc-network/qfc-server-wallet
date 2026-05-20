@@ -8,6 +8,7 @@
 //! which bypasses the env var and is gated behind a clearly-named API.
 
 use async_trait::async_trait;
+use qfc_policy::{SigningPayload as PolicySigningPayload, SigningRequest as PolicySigningRequest};
 use qfc_sss::{combine_shares, split_secret, ShamirParams, ShamirShare};
 use qfc_wallet_types::{HdPath, SecretBytes, SigningScheme};
 use rand::rngs::OsRng;
@@ -19,6 +20,7 @@ use crate::enclave::{
     Enclave, EnclaveError, EnclaveSignRequest, EnclaveSignResponse, GenerateWalletRequest,
     GenerateWalletResponse,
 };
+use crate::hybrid_verifier::{HybridVerifier, WalletCeilings};
 use crate::signer::signer_for_scheme;
 
 /// Sentinel value the operator must set to opt into mock enclave usage.
@@ -26,8 +28,26 @@ pub const MOCK_ENABLE_ENV: &str = "QFC_ALLOW_MOCK_ENCLAVE";
 const MOCK_ENABLE_VALUE: &str = "yes-i-know";
 
 /// In-process enclave. Holds its own attestation key.
+///
+/// M3 §3.4 follow-up: when configured with a pinned policy-service public
+/// key via [`MockEnclave::with_policy_service_pubkey`], `sign_in_enclave`
+/// invokes the [`HybridVerifier`] before any SSS combine / curve sign.
+/// This brings the mock backend into parity with what the Nitro EIF boot
+/// binary does in production.
 pub struct MockEnclave {
     attestation_key: MockAttestationKey,
+    /// Pinned policy-service public key. When `Some`, the hybrid verifier
+    /// is invoked on every `sign_in_enclave`. When `None`, the mock skips
+    /// hybrid verification entirely — preserves M1/M2 back-compat.
+    policy_service_pubkey: Option<Vec<u8>>,
+    /// When `true` (and `policy_service_pubkey` is `Some`), the mock
+    /// rejects sign requests that carry `policy_decision: None`. Defaults
+    /// to `false` so callers that opt into hybrid verification can still
+    /// accept legacy in-flight requests during a migration window. Per
+    /// `docs/m3-decisions.md` D21, the in-enclave verifier itself defaults
+    /// fail-closed; this mock-level flag is the looser default to keep the
+    /// migration window open.
+    require_signed_decision: bool,
 }
 
 impl MockEnclave {
@@ -42,6 +62,8 @@ impl MockEnclave {
         if Self::env_gate_open(env.as_deref()) {
             Ok(Self {
                 attestation_key: MockAttestationKey::generate(),
+                policy_service_pubkey: None,
+                require_signed_decision: false,
             })
         } else {
             Err(EnclaveError::MockNotAllowed)
@@ -58,6 +80,8 @@ impl MockEnclave {
     pub fn new_for_testing() -> Self {
         Self {
             attestation_key: MockAttestationKey::generate(),
+            policy_service_pubkey: None,
+            require_signed_decision: false,
         }
     }
 
@@ -67,7 +91,37 @@ impl MockEnclave {
     pub fn new_for_testing_with_seed(seed: [u8; 32]) -> Self {
         Self {
             attestation_key: MockAttestationKey::from_seed(seed),
+            policy_service_pubkey: None,
+            require_signed_decision: false,
         }
+    }
+
+    /// Pin the policy-service public key the in-enclave hybrid verifier
+    /// trusts. When set, every `sign_in_enclave` that carries a
+    /// `policy_decision` is re-verified by [`HybridVerifier`] before
+    /// share-combine + curve-sign.
+    ///
+    /// Production deployments MUST set this to the policy-service's
+    /// identity key. Without it, the hybrid scheme degrades to "host
+    /// trusts the policy decision blindly" — which defeats the whole
+    /// point.
+    #[must_use]
+    pub fn with_policy_service_pubkey(mut self, pubkey: Vec<u8>) -> Self {
+        self.policy_service_pubkey = Some(pubkey);
+        self
+    }
+
+    /// When set (in combination with [`Self::with_policy_service_pubkey`]),
+    /// the mock rejects sign requests that don't carry a
+    /// `SignedPolicyDecision`. Defaults to `false`.
+    ///
+    /// Use `true` for production-style integration tests where every sign
+    /// MUST be policy-signed. Use `false` (the default) for migration /
+    /// back-compat tests where some flows pre-date the signer wiring.
+    #[must_use]
+    pub fn with_require_signed_decision(mut self, require: bool) -> Self {
+        self.require_signed_decision = require;
+        self
     }
 
     /// Borrow the mock's attestation public key (32-byte ed25519). Useful
@@ -142,6 +196,11 @@ impl MockEnclave {
     }
 }
 
+fn current_unix_ms() -> i64 {
+    let nanos = time::OffsetDateTime::now_utc().unix_timestamp_nanos();
+    i64::try_from(nanos / 1_000_000).unwrap_or(i64::MAX)
+}
+
 #[async_trait]
 impl Enclave for MockEnclave {
     async fn attest(&self, nonce: [u8; 32]) -> Result<AttestationDoc, EnclaveError> {
@@ -152,6 +211,52 @@ impl Enclave for MockEnclave {
         &self,
         req: EnclaveSignRequest,
     ) -> Result<EnclaveSignResponse, EnclaveError> {
+        // 0. Hybrid policy verification (M3 §3.4). When the mock is
+        //    configured with a pinned policy-service public key, run the
+        //    verifier *before* any SSS combine or curve sign so a bad
+        //    decision can't leak key material into the signature path.
+        if let Some(pubkey) = &self.policy_service_pubkey {
+            let verifier = HybridVerifier::new(pubkey.clone())
+                .with_require_signed_decision(self.require_signed_decision);
+            // Build the SigningRequest projection the verifier expects.
+            // The verifier inspects `payload.chain_id()` + decoded EVM
+            // value, so we need the structured payload. The orchestrator
+            // passes it in `policy_signing_payload`; fall back to
+            // `SigningPayload::Raw { bytes: req.message.clone() }` when
+            // it's not present so the verifier can at least apply the
+            // signed-decision binding + freshness checks.
+            let payload =
+                req.policy_signing_payload
+                    .clone()
+                    .unwrap_or_else(|| PolicySigningPayload::Raw {
+                        bytes: req.message.clone(),
+                    });
+            let verifier_request = PolicySigningRequest {
+                request_id: req.request_id,
+                wallet_id: req.wallet_id,
+                requester: qfc_policy::Requester::ApiKey {
+                    key_id: "mock-enclave".into(),
+                },
+                payload,
+                hd_path: req.hd_path.clone(),
+                received_at_unix_ms: current_unix_ms(),
+            };
+            let ceilings = req
+                .wallet_ceilings
+                .clone()
+                .unwrap_or_else(|| WalletCeilings {
+                    wallet_id: req.wallet_id,
+                    ..Default::default()
+                });
+            verifier.verify(
+                req.policy_decision.as_ref(),
+                &req.approvals,
+                &verifier_request,
+                &ceilings,
+                current_unix_ms(),
+            )?;
+        }
+
         // 1. Validate share set.
         let _params = Self::check_share_params(&req.shares)?;
         // Cross-check that every share belongs to req.wallet_id is not
@@ -336,6 +441,8 @@ mod tests {
                 context: SigningContext::default(),
                 policy_decision: None,
                 approvals: Vec::new(),
+                wallet_ceilings: None,
+                policy_signing_payload: None,
             })
             .await
             .unwrap();
@@ -386,6 +493,8 @@ mod tests {
                 context: SigningContext::default(),
                 policy_decision: None,
                 approvals: Vec::new(),
+                wallet_ceilings: None,
+                policy_signing_payload: None,
             })
             .await
             .unwrap();
@@ -428,6 +537,8 @@ mod tests {
                 context: SigningContext::default(),
                 policy_decision: None,
                 approvals: Vec::new(),
+                wallet_ceilings: None,
+                policy_signing_payload: None,
             })
             .await;
         assert!(matches!(
@@ -466,6 +577,8 @@ mod tests {
                 context: SigningContext::default(),
                 policy_decision: None,
                 approvals: Vec::new(),
+                wallet_ceilings: None,
+                policy_signing_payload: None,
             })
             .await;
         assert!(matches!(err, Err(EnclaveError::InconsistentShares(_))));
@@ -529,6 +642,8 @@ mod tests {
                 context: SigningContext::default(),
                 policy_decision: None,
                 approvals: Vec::new(),
+                wallet_ceilings: None,
+                policy_signing_payload: None,
             })
             .await
             .unwrap();

@@ -326,3 +326,165 @@ failure. The integration test is the canary.
   ceremony; the field set is small and stable.
 
 ---
+
+## D33 — `PolicyServiceSigner::sign_decision` takes a four-arg signature; `max_age_secs` is per-call, not stored on the signer
+
+**What:** The trait surface is
+`sign_decision(decision, request_id, wallet_id, max_age_secs)`. The
+freshness window is a method parameter, not a field on the signer struct.
+
+**Why:** The freshness ceiling is an operational dial. Different signing
+flows (interactive UX, batch jobs, scheduled webhook callbacks) tolerate
+different replay windows. Embedding `max_age_secs` in the signer would
+force one global value across every flow; threading it per call lets the
+orchestrator pick a tight value (60s for normal sign) and a looser value
+(say 5 min) for batch jobs that gather a queue before submitting.
+
+Defense-in-depth: the in-enclave verifier still caps with
+`MAX_DECISION_AGE_SECS = 24h` (D30) regardless of the per-call value, so
+a misconfigured caller cannot bypass the hard ceiling.
+
+**Alternatives considered:**
+- Single-arg trait carrying the decision only, with everything else
+  hidden inside the signer. Rejected — couples the signer to a specific
+  flow's policy on freshness.
+- Embed `max_age_secs` on a `Signer::config()` struct. Rejected — adds
+  a level of indirection for no benefit; the call site already knows the
+  flow.
+- Make it a const at the WalletService layer. Rejected — leaves the
+  signer trait less expressive than the M3+M4 production needs (batch
+  signing flows want a separate dial).
+
+---
+
+## D34 — `with_policy_service_signer` is an opt-in builder, not a required constructor arg
+
+**What:** `WalletService::new` constructs a service with
+`policy_service_signer: None`. Wiring is opt-in via
+`with_policy_service_signer(self, Arc<dyn PolicyServiceSigner>) -> Self`.
+
+**Why:** Three reasons:
+1. **M1/M2 back-compat.** The M1/M2 test suites (228+ tests at retro
+   time) wire `WalletService::new` directly. Adding a required arg would
+   force every test through a refactor when the wiring isn't relevant to
+   what they exercise.
+2. **Production deployments MUST opt in.** Making the signer optional at
+   the type level documents that the M1/M2 sign flow still works
+   without it (with the verifier disabled at the enclave layer). The
+   audit chain at `PolicyDecisionSigned` makes the distinction visible
+   to operators: an event-pair of
+   `SigningEvaluated → PolicyDecisionSigned → SigningAttempted` confirms
+   the hybrid scheme is engaged; the older
+   `SigningEvaluated → SigningAttempted` (no `PolicyDecisionSigned`
+   between them) means it isn't. Production deployments check for the
+   middle event in their audit chain monitoring.
+3. **Mock-enclave parity.** The `MockEnclave` matches: the hybrid
+   verifier runs only when `with_policy_service_pubkey(...)` is called.
+   The two builders pair up — orchestrator wires a signer iff the
+   enclave is pinned to its key.
+
+The expectation is documented at the field and builder docs: production
+deployments MUST set it; the brief explicitly calls out that absence
+defeats the hybrid scheme's security argument.
+
+**Alternatives considered:**
+- Make it a required constructor argument. Rejected — every M1/M2 test
+  becomes churn for an additive feature.
+- Default to a "panic-on-use" signer. Rejected — defeats the back-compat
+  promise; M1/M2 flows with `policy_decision: None` are still useful for
+  testing and migration.
+- Two constructors (`new_legacy` + `new_with_hybrid`). Rejected — adds
+  surface for no expressive gain over the builder pattern.
+
+---
+
+## D35 — `AuditKind::PolicyDecisionSigned` is kind byte 17
+
+**What:** The new audit kind for "policy decision was signed by the
+policy-service signer and is being threaded into `EnclaveSignRequest`"
+gets kind byte 17. M4's `QuorumThresholdReached` takes byte 16; D35
+continues the sequence rather than slotting in.
+
+**Why:** The kind byte is part of the audit chain's signed pre-image
+(`event.rs::kind_byte`). Renumbering an existing kind would break every
+deployed audit chain's replay verification. The right move is always
+append-only.
+
+The byte appears between `QuorumThresholdReached` (16) and any future
+M5/M6 kinds. The corresponding `AuditKindDto` (OpenAPI mirror) is
+extended in `crates/qfc-server-wallet/src/api/schemas.rs` so external
+clients see the new value.
+
+**Alternatives considered:**
+- Renumber. Rejected — breaks audit chain replay.
+- Skip a byte. Rejected — gives bad expectations for "what's the next
+  free slot" without buying anything.
+
+---
+
+## D36 — Orchestrator default `max_age_secs = 60s` for production signing flows
+
+**What:** `WalletService::sign` passes `MAX_DECISION_AGE_SECS_DEFAULT =
+60` (constant in `service.rs`) to `PolicyServiceSigner::sign_decision`.
+
+**Why:** 60s is long enough to absorb normal latency between policy
+evaluation, audit emission, share fetch, and enclave round-trip
+(observed at ~50ms p95 with M2 mock backends — the real Nitro round
+trip will add a couple of hundred ms but stays well under 60s). It's
+short enough that a leaked decision has a small effective replay window
+before the in-enclave verifier rejects it.
+
+The constant is `pub const` so production deployments can read it for
+their own SLO docs; operator-tunable per flow is a follow-up (the
+`max_age_secs` is already a parameter on the trait per D33).
+
+**Alternatives considered:**
+- 30s. Rejected — too tight for cold-start or testcontainers-warmup
+  flows in CI.
+- 5 min. Rejected — too loose; the whole point of binding the timestamp
+  is to bound replay value.
+- Make it a runtime config knob on `WalletService` immediately. Deferred
+  — premature; bring it in when a real flow demands a different value.
+
+---
+
+## D37 — `EnclaveSignRequest.wallet_ceilings` + `policy_signing_payload` carry the M3 hard-ceiling inputs additively
+
+**What:** Two new `Option<_>` fields on `EnclaveSignRequest`:
+`wallet_ceilings: Option<WalletCeilings>` and
+`policy_signing_payload: Option<qfc_policy::SigningPayload>`. The
+orchestrator populates both whenever it threads a `SignedPolicyDecision`
+through; `None` for legacy callers means the verifier (when it runs)
+falls back to empty ceilings + a raw payload projection.
+
+**Why:** The in-enclave verifier needs the structured payload to do its
+hard-ceiling re-check — the verifier re-decodes the EVM tx itself via
+`qfc_policy::decode_evm_tx` so the host can't lie about the decoded
+value. The verifier also needs the wallet's `max_value_per_tx /
+contract_allowlist / chain_allowlist` (already on `WalletConfig` per
+M3 §3.4 schema additions, but not yet on the cross-boundary
+`EnclaveSignRequest`).
+
+Both fields are `Option<_>` so M1/M2 callers compile unchanged. The
+`MockEnclave`'s back-compat behavior is: if `policy_service_pubkey` is
+`None`, hybrid verification is skipped and the missing ceilings don't
+matter. If `policy_service_pubkey` is `Some`, the verifier is invoked
+with empty defaults when ceilings aren't passed.
+
+**Alternatives considered:**
+- Inline the ceilings into the `SignedPolicyDecision`. Rejected — the
+  ceilings are an enclave-attested wallet property, not a per-decision
+  one. Putting them on the decision means the policy service has to
+  know them at decision time (it doesn't — they live in the wallet
+  record).
+- Pass the full `WalletConfig`. Rejected — leaks server-wallet shape
+  into `qfc-enclave`. The `WalletCeilings` projection is the right
+  seam.
+- Re-decode the structured payload inside the enclave from
+  `req.message`. Rejected — `req.message` is already
+  `canonical_message_bytes(payload)` which for VM payloads IS the raw
+  envelope, but the chain_id / target / vm tag are not recoverable
+  from the bytes alone for some envelopes. Passing the structured
+  payload is the cleanest cut.
+
+---

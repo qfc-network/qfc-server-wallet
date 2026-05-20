@@ -27,6 +27,13 @@ hex.workspace = true
 # EVM decoder (M2 P4)
 alloy-rlp.workspace = true
 
+# M3 follow-up — policy-service identity key (LocalPolicyServiceSigner).
+# The signer side of the hybrid scheme produces SignedPolicyDecision; the
+# enclave verifies via the existing qfc-enclave::hybrid_verifier path.
+ed25519-dalek.workspace = true
+rand_core.workspace = true
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 proptest.workspace = true
+rand = { workspace = true }

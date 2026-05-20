@@ -19,6 +19,7 @@
 pub mod decision;
 pub mod decoders;
 pub mod policy;
+pub mod policy_service_signer;
 pub mod rate_limit;
 pub mod request;
 pub mod rule_set_policy;
@@ -32,6 +33,9 @@ pub use decoders::{
     decode_evm_tx, AccessListItem, DecodedEvmTx, EvmDecodeError, EvmDecoder, EvmTxType,
 };
 pub use policy::Policy;
+pub use policy_service_signer::{
+    LocalPolicyServiceSigner, PolicyServiceSigner, PolicyServiceSignerError,
+};
 pub use rate_limit::{Clock, ManualClock, SystemClock, TokenBucketLimiter};
 pub use request::{Requester, SigningPayload, SigningRequest, VmType};
 pub use rule_set_policy::RuleSetPolicy;
