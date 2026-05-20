@@ -30,7 +30,8 @@ pub mod vm;
 
 pub use decision::{DenyReason, PolicyDecision, PolicyError, RuleEffect, RuleHit};
 pub use decoders::{
-    decode_evm_tx, AccessListItem, DecodedEvmTx, EvmDecodeError, EvmDecoder, EvmTxType,
+    decode_evm_tx, decode_qvm_tx, AccessListItem, DecodedEvmTx, DecodedQvmTx, EvmDecodeError,
+    EvmDecoder, EvmTxType, QvmDecodeError, QvmDecoder, QvmTxType,
 };
 pub use policy::Policy;
 pub use policy_service_signer::{

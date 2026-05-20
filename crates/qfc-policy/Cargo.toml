@@ -33,6 +33,9 @@ alloy-rlp.workspace = true
 ed25519-dalek.workspace = true
 rand_core.workspace = true
 
+# QVM minimal decoder (M5) — borsh envelope per RFC §9.6 option (b).
+borsh.workspace = true
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 proptest.workspace = true

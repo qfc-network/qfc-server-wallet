@@ -181,9 +181,25 @@ impl MockEnclave {
                     Ok(d.secret)
                 }
             },
-            SigningScheme::MlDsa44 => Err(EnclaveError::SchemeNotImplemented("ml_dsa_44")),
-            SigningScheme::MlDsa65 => Err(EnclaveError::SchemeNotImplemented("ml_dsa_65")),
-            SigningScheme::MlDsa87 => Err(EnclaveError::SchemeNotImplemented("ml_dsa_87")),
+            // PQ schemes (M5): non-HD per RFC §9.1 / D40. The 32-byte FIPS
+            // 204 seed (`xi`) IS the signing key. Reject any HD path here —
+            // the orchestrator should never thread one through for a PQ
+            // wallet; this is defence-in-depth.
+            SigningScheme::MlDsa44 | SigningScheme::MlDsa65 | SigningScheme::MlDsa87 => {
+                if hd_path.is_some() {
+                    return Err(EnclaveError::Derivation(
+                        crate::error::DerivationError::SchemeNotHd("ml_dsa"),
+                    ));
+                }
+                if seed.len() < crate::signers::ML_DSA_SEED_BYTES {
+                    return Err(EnclaveError::InvalidRequest(
+                        "seed too short for ML-DSA (need 32 bytes)",
+                    ));
+                }
+                Ok(SecretBytes::from_slice(
+                    &seed.expose()[..crate::signers::ML_DSA_SEED_BYTES],
+                ))
+            }
         }
     }
 
@@ -320,22 +336,31 @@ impl Enclave for MockEnclave {
                 "invalid (threshold, total) — need 2 <= threshold <= total",
             ));
         }
-        if req.scheme.is_post_quantum() {
-            return Err(EnclaveError::SchemeNotImplemented(match req.scheme {
-                SigningScheme::MlDsa44 => "ml_dsa_44",
-                SigningScheme::MlDsa65 => "ml_dsa_65",
-                SigningScheme::MlDsa87 => "ml_dsa_87",
-                _ => "post_quantum",
-            }));
+        // PQ schemes are non-HD per RFC §9.1 / D40. Reject any
+        // `master_hd_path` for PQ wallets up front so the orchestrator
+        // can't accidentally request a derived public key.
+        if req.scheme.is_post_quantum() && req.master_hd_path.is_some() {
+            return Err(EnclaveError::Derivation(
+                crate::error::DerivationError::SchemeNotHd("ml_dsa"),
+            ));
         }
 
-        // 1. Generate a 64-byte BIP39-style seed (so it's compatible with HD
-        //    derivation downstream). We don't materialize a mnemonic here —
-        //    operators that want one go through `mnemonic_to_seed` instead.
-        let mut seed_bytes = [0u8; 64];
+        // 1. Generate seed material. Classical schemes get the 64-byte
+        //    BIP39-style seed so HD derivation works downstream; PQ schemes
+        //    get exactly 32 bytes (the FIPS 204 `xi`). Splitting the seed
+        //    sizes here keeps the SSS chunking honest — a PQ wallet's seed
+        //    is the same shape as an ed25519 wallet's seed at the wire
+        //    layer, but the BIP39-style 64-byte buffer would be twice as
+        //    large for no benefit.
+        let seed_len = if req.scheme.is_post_quantum() {
+            crate::signers::ML_DSA_SEED_BYTES
+        } else {
+            64
+        };
+        let mut seed_bytes = vec![0u8; seed_len];
         OsRng.fill_bytes(&mut seed_bytes);
         let seed = SecretBytes::from_slice(&seed_bytes);
-        // Wipe stack copy.
+        // Wipe stack/heap copy.
         seed_bytes.iter_mut().for_each(|b| *b = 0);
 
         // 2. Derive the *reported* public key at master_hd_path.
@@ -585,7 +610,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn generate_rejects_pq_schemes() {
+    async fn generate_pq_with_hd_path_rejected() {
+        // M5: PQ wallets are non-HD (§9.1). A request with master_hd_path
+        // set on a PQ scheme is rejected up-front.
         let e = enc();
         let err = e
             .generate_wallet(GenerateWalletRequest {
@@ -593,10 +620,183 @@ mod tests {
                 scheme: SigningScheme::MlDsa44,
                 threshold: 2,
                 total: 3,
-                master_hd_path: None,
+                master_hd_path: Some("m/0'".parse().unwrap()),
             })
             .await;
-        assert!(matches!(err, Err(EnclaveError::SchemeNotImplemented(_))));
+        assert!(matches!(err, Err(EnclaveError::Derivation(_))));
+    }
+
+    #[tokio::test]
+    async fn sign_pq_with_hd_path_rejected() {
+        // Same invariant on the sign path — `hd_path: Some(...)` for a PQ
+        // wallet must surface SchemeNotHd.
+        let e = enc();
+        let wallet_id = WalletId::new();
+        let gen = e
+            .generate_wallet(GenerateWalletRequest {
+                wallet_id,
+                scheme: SigningScheme::MlDsa65,
+                threshold: 2,
+                total: 3,
+                master_hd_path: None,
+            })
+            .await
+            .unwrap();
+        let err = e
+            .sign_in_enclave(EnclaveSignRequest {
+                request_id: RequestId::new(),
+                wallet_id,
+                shares: gen.shares[..2].to_vec(),
+                scheme: SigningScheme::MlDsa65,
+                hd_path: Some("m/0'".parse().unwrap()),
+                message: b"x".to_vec(),
+                hash_alg: HashAlg::None,
+                context: SigningContext::default(),
+                policy_decision: None,
+                approvals: Vec::new(),
+                wallet_ceilings: None,
+                policy_signing_payload: None,
+            })
+            .await;
+        assert!(matches!(err, Err(EnclaveError::Derivation(_))));
+    }
+
+    #[tokio::test]
+    async fn generate_then_sign_ml_dsa_44() {
+        // M5 end-to-end: ML-DSA-44 wallet, generate → sign → verify.
+        let e = enc();
+        let wallet_id = WalletId::new();
+        let gen = e
+            .generate_wallet(GenerateWalletRequest {
+                wallet_id,
+                scheme: SigningScheme::MlDsa44,
+                threshold: 2,
+                total: 3,
+                master_hd_path: None,
+            })
+            .await
+            .unwrap();
+        gen.attestation.verify().unwrap();
+        assert_eq!(gen.shares.len(), 3);
+        // ML-DSA-44 public key is 1312 bytes.
+        assert_eq!(gen.master_public_key.len(), 1312);
+
+        let resp = e
+            .sign_in_enclave(EnclaveSignRequest {
+                request_id: RequestId::new(),
+                wallet_id,
+                shares: gen.shares[..2].to_vec(),
+                scheme: SigningScheme::MlDsa44,
+                hd_path: None,
+                message: b"pq message".to_vec(),
+                hash_alg: HashAlg::None,
+                context: SigningContext::default(),
+                policy_decision: None,
+                approvals: Vec::new(),
+                wallet_ceilings: None,
+                policy_signing_payload: None,
+            })
+            .await
+            .unwrap();
+        resp.attestation.verify().unwrap();
+        assert_eq!(resp.public_key, gen.master_public_key);
+        // ML-DSA-44 signature is 2420 bytes.
+        assert_eq!(resp.signature.len(), 2420);
+        // External verification.
+        crate::MlDsa44Signer
+            .verify(
+                &resp.public_key,
+                b"pq message",
+                &resp.signature,
+                HashAlg::None,
+            )
+            .expect("ML-DSA-44 sig valid");
+    }
+
+    #[tokio::test]
+    async fn generate_then_sign_ml_dsa_65() {
+        let e = enc();
+        let wallet_id = WalletId::new();
+        let gen = e
+            .generate_wallet(GenerateWalletRequest {
+                wallet_id,
+                scheme: SigningScheme::MlDsa65,
+                threshold: 3,
+                total: 5,
+                master_hd_path: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(gen.master_public_key.len(), 1952);
+        let resp = e
+            .sign_in_enclave(EnclaveSignRequest {
+                request_id: RequestId::new(),
+                wallet_id,
+                shares: gen.shares[..3].to_vec(),
+                scheme: SigningScheme::MlDsa65,
+                hd_path: None,
+                message: b"sign me ml-dsa-65".to_vec(),
+                hash_alg: HashAlg::None,
+                context: SigningContext::default(),
+                policy_decision: None,
+                approvals: Vec::new(),
+                wallet_ceilings: None,
+                policy_signing_payload: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(resp.signature.len(), 3309);
+        crate::MlDsa65Signer
+            .verify(
+                &resp.public_key,
+                b"sign me ml-dsa-65",
+                &resp.signature,
+                HashAlg::None,
+            )
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn generate_then_sign_ml_dsa_87() {
+        let e = enc();
+        let wallet_id = WalletId::new();
+        let gen = e
+            .generate_wallet(GenerateWalletRequest {
+                wallet_id,
+                scheme: SigningScheme::MlDsa87,
+                threshold: 2,
+                total: 3,
+                master_hd_path: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(gen.master_public_key.len(), 2592);
+        let resp = e
+            .sign_in_enclave(EnclaveSignRequest {
+                request_id: RequestId::new(),
+                wallet_id,
+                shares: gen.shares[..2].to_vec(),
+                scheme: SigningScheme::MlDsa87,
+                hd_path: None,
+                message: b"ml-dsa-87 payload".to_vec(),
+                hash_alg: HashAlg::None,
+                context: SigningContext::default(),
+                policy_decision: None,
+                approvals: Vec::new(),
+                wallet_ceilings: None,
+                policy_signing_payload: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(resp.signature.len(), 4627);
+        crate::MlDsa87Signer
+            .verify(
+                &resp.public_key,
+                b"ml-dsa-87 payload",
+                &resp.signature,
+                HashAlg::None,
+            )
+            .unwrap();
     }
 
     #[tokio::test]

@@ -63,7 +63,10 @@ pub use hybrid_verifier::{
     HybridVerifier, HybridVerifyError, WalletCeilings, MAX_APPROVALS, MAX_DECISION_AGE_SECS,
 };
 pub use signer::{dispatch_signer, signer_for_scheme, Signer};
-pub use signers::{Ed25519Signer, Secp256k1RecoverableSigner, Secp256k1Signer};
+pub use signers::{
+    Ed25519Signer, MlDsa44Signer, MlDsa65Signer, MlDsa87Signer, Secp256k1RecoverableSigner,
+    Secp256k1Signer, ML_DSA_SEED_BYTES,
+};
 pub use verify_attestation::{
     verify_attestation, verify_mock_attestation, AttestationVerifyError, NitroAttestationDoc,
     PcrConstraint, VerifiedAttestation,
