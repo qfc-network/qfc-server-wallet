@@ -58,6 +58,17 @@ rand_core = "0.6"
 ed25519-dalek = { version = "2.1", features = ["serde", "rand_core", "zeroize"] }
 k256 = { version = "0.13", features = ["ecdsa", "serde", "sha256"] }
 
+# Post-quantum signatures — M5 (FIPS 204 ML-DSA, pure Rust, RustCrypto family).
+# See docs/m5-decisions.md D38 for why this crate (vs `pqcrypto-mldsa` C ref impl).
+ml-dsa = { version = "0.1", features = ["alloc", "rand_core", "zeroize"], default-features = false }
+# `signature` crate is re-exported by `ml-dsa` but pinning it explicitly so
+# the Signer / Verifier / Keypair traits can be imported across crates.
+signature = { version = "3.0", default-features = false, features = ["alloc"] }
+
+# Borsh — used by qfc-policy QVM decoder to parse qfc-core's TransactionType
+# envelope (RFC §9.6 option (b); see docs/m5-decisions.md D41).
+borsh = { version = "1.5", features = ["derive"] }
+
 # Hashing
 blake3 = "1.5"
 sha2 = "0.10"

@@ -1,9 +1,11 @@
 //! Concrete `Signer` impls grouped by curve.
 
 mod ed25519;
+mod ml_dsa;
 mod secp256k1;
 
 pub use ed25519::Ed25519Signer;
+pub use ml_dsa::{MlDsa44Signer, MlDsa65Signer, MlDsa87Signer, SEED_BYTES as ML_DSA_SEED_BYTES};
 pub use secp256k1::{Secp256k1RecoverableSigner, Secp256k1Signer};
 
 #[cfg(test)]
@@ -126,24 +128,30 @@ mod tests {
             SigningScheme::Ed25519,
             SigningScheme::Secp256k1,
             SigningScheme::Secp256k1Recoverable,
+            SigningScheme::MlDsa44,
+            SigningScheme::MlDsa65,
+            SigningScheme::MlDsa87,
         ] {
             let s = crate::signer::signer_for_scheme(scheme).unwrap();
             assert_eq!(s.scheme(), scheme);
         }
     }
 
+    /// PQ schemes were `NotImplemented` in M1; M5 wires them through. Test
+    /// pinned here so we don't regress the dispatch tables silently.
     #[test]
-    fn pq_schemes_report_not_implemented() {
+    fn pq_schemes_now_dispatch_to_real_signers() {
         for scheme in [
             SigningScheme::MlDsa44,
             SigningScheme::MlDsa65,
             SigningScheme::MlDsa87,
         ] {
-            let err = crate::signer::signer_for_scheme(scheme);
-            assert!(matches!(
-                err,
-                Err(crate::error::SignerError::NotImplemented(_))
-            ));
+            let s = crate::signer::signer_for_scheme(scheme).expect("M5 dispatch");
+            assert_eq!(s.scheme(), scheme);
+            // public_key derivation must succeed on a fresh 32-byte seed.
+            let secret = SecretBytes::from_slice(&[0xCDu8; 32]);
+            let pk = s.public_key(&secret).unwrap();
+            assert!(!pk.is_empty());
         }
     }
 
