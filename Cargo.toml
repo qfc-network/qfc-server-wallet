@@ -90,6 +90,13 @@ hex = "0.4"
 bs58 = "0.5"
 base64 = "0.22"
 
+# COSE_Sign1 / CBOR — Nitro AttestationDoc parsing.
+# See docs/m3-decisions.md D24 (why coset over aws-nitro-enclaves-cose).
+# `ciborium` is the pure-Rust CBOR codec coset is built on; we re-use it
+# directly to encode/decode the inner attestation payload Map<u8 -> Value>.
+coset = "0.4"
+ciborium = "0.2"
+
 # EVM / RLP
 alloy-rlp = "0.3"
 

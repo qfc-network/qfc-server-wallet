@@ -55,6 +55,10 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::attestation::{AttestationDoc, AttestationError, PCR_LEN};
+use crate::cose::{
+    extract_payload, parse_cose_sign1, verify_cose_signature, verify_cose_signature_es384,
+    CoseParseError, CoseSign1Envelope, CoseVerifyError,
+};
 
 /// PCR constraint a verifier checks the attestation against.
 ///
@@ -121,6 +125,33 @@ impl PcrConstraint {
     }
 }
 
+/// Which signature flavour the document carries, and therefore which
+/// verifier path `verify_attestation` should dispatch to.
+///
+/// - `Mock` — `cose_sign1` is JSON of the parsed payload and `signature`
+///   is an ed25519 sig over those bytes. This is the original M3 skeleton
+///   shape; M1/M2/M3 callers continue to construct documents that way.
+/// - `CoseSign1Ed25519` — `cose_sign1` is a real COSE_Sign1 CBOR envelope
+///   signed with ed25519. `leaf_certificate` carries the 32-byte ed25519
+///   leaf public key. This is what the new `from_cose_sign1` constructor
+///   sets up.
+/// - `CoseSign1Es384` — what AWS Nitro emits in production (ECDSA-P384
+///   over a P-384 leaf cert). Verification path is a stub today
+///   ([D47](../../../docs/m3-decisions.md#d47)); included so the
+///   field set is forward-compatible and so callers can detect the
+///   format without trying to verify it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum SignatureKind {
+    /// JSON + ed25519, M3 skeleton mock format. Default for back-compat.
+    #[default]
+    Mock,
+    /// Real COSE_Sign1 CBOR envelope with an ed25519 signature.
+    CoseSign1Ed25519,
+    /// Real COSE_Sign1 CBOR envelope with an ECDSA-P384 signature (AWS
+    /// Nitro production format). Verification is stubbed; see D47.
+    CoseSign1Es384,
+}
+
 /// Nitro-shape attestation envelope. The COSE_Sign1 bytes carry everything
 /// a third party needs to verify; `parsed_payload` is provided as a
 /// convenience.
@@ -130,27 +161,190 @@ impl PcrConstraint {
 /// where `payload` is the CBOR-encoded attestation document (PCRs +
 /// user_data + nonce + timestamp + module_id + certificate + cabundle).
 ///
-/// For the M3 skeleton we serialize the parsed payload as JSON so tests
-/// can construct expected documents without writing a CBOR encoder by
-/// hand. A future PR ships the real `coset`-based CBOR parser.
+/// Two construction paths supported:
+/// - `NitroAttestationDoc::mock(...)` — for the M3 skeleton mock flow.
+///   `signature_kind = Mock`.
+/// - `NitroAttestationDoc::from_cose_sign1(bytes)` — parses a real
+///   COSE_Sign1 CBOR envelope (see `crate::cose`). `signature_kind =
+///   CoseSign1Ed25519` (or `Es384` if the protected header announces it,
+///   which today routes through the deferred verifier).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NitroAttestationDoc {
-    /// Raw COSE_Sign1 bytes (or, in the M3 skeleton, the JSON envelope).
+    /// Raw COSE_Sign1 bytes (CBOR in the real path, JSON in the mock path).
     #[serde(with = "serde_bytes")]
     pub cose_sign1: Vec<u8>,
-    /// Parsed payload (mirror of what the COSE Sign1 body decodes to).
+    /// Parsed payload — mirror of the CBOR / JSON body for callers that
+    /// want to read PCRs etc. without re-parsing.
     pub parsed_payload: NitroAttestationPayload,
-    /// Leaf-cert (or, in the M3 skeleton, leaf-pubkey) bytes. The verifier
-    /// uses this to check the COSE signature. In production this is part
-    /// of the COSE envelope; we surface it here for the skeleton.
+    /// Leaf cert. For `Mock` and `CoseSign1Ed25519` this is the 32-byte
+    /// ed25519 leaf public key. For `CoseSign1Es384` this is the X.509
+    /// DER leaf cert from which a P-384 key is extracted (deferred — see
+    /// D47).
     #[serde(with = "serde_bytes")]
     pub leaf_certificate: Vec<u8>,
     /// Cert chain from leaf → AWS Nitro root. The verifier walks this
     /// chain rather than trusting the leaf directly.
     pub cabundle: Vec<Vec<u8>>,
-    /// Signature over `cose_sign1` body.
+    /// Signature over `cose_sign1` body. For `Mock`, the ed25519 signature
+    /// over the JSON bytes; for COSE paths the signature inside the
+    /// envelope (also re-surfaced here for easy access).
     #[serde(with = "serde_bytes")]
     pub signature: Vec<u8>,
+    /// Which signature scheme the document was built against. Drives
+    /// dispatch in `verify_attestation`. Defaults to `Mock` for back-compat
+    /// with existing serialized documents that pre-date this field.
+    #[serde(default)]
+    pub signature_kind: SignatureKind,
+}
+
+impl NitroAttestationDoc {
+    /// Construct a mock-format `NitroAttestationDoc` — JSON-encoded
+    /// payload + ed25519 signature over those bytes. This is the M3
+    /// skeleton constructor; M1/M2/M3 tests and the
+    /// `verify_mock_attestation` path use it.
+    ///
+    /// `signature_kind` is forced to `SignatureKind::Mock`.
+    #[must_use]
+    pub fn mock(
+        cose_sign1: Vec<u8>,
+        parsed_payload: NitroAttestationPayload,
+        leaf_certificate: Vec<u8>,
+        cabundle: Vec<Vec<u8>>,
+        signature: Vec<u8>,
+    ) -> Self {
+        Self {
+            cose_sign1,
+            parsed_payload,
+            leaf_certificate,
+            cabundle,
+            signature,
+            signature_kind: SignatureKind::Mock,
+        }
+    }
+
+    /// Parse a real COSE_Sign1 CBOR envelope into a `NitroAttestationDoc`.
+    ///
+    /// The leaf public key / certificate is taken from the inner payload's
+    /// `certificate` field (per the AWS Nitro spec). For the ed25519 test
+    /// path, that field holds a 32-byte raw public key.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AttestationVerifyError::MalformedCose` if the bytes are
+    /// not a parseable COSE_Sign1, or if the inner payload is malformed.
+    pub fn from_cose_sign1(bytes: &[u8]) -> Result<Self, AttestationVerifyError> {
+        let envelope = parse_cose_sign1(bytes).map_err(|e| map_parse_err(&e))?;
+        let inner = extract_payload(&envelope).map_err(|e| map_parse_err(&e))?;
+
+        // Translate the typed `crate::cose::AttestationPayload` into the
+        // structurally-similar `NitroAttestationPayload` carried by this
+        // module. Both keep the same field set; we just narrow `nonce` to
+        // the fixed-size `[u8; 32]`.
+        let mut nonce_arr = [0u8; 32];
+        if inner.nonce.len() == 32 {
+            nonce_arr.copy_from_slice(&inner.nonce);
+        } else if !inner.nonce.is_empty() {
+            // Nitro spec requires 32-byte nonce when present. Reject the
+            // weird-length case fail-closed.
+            return Err(AttestationVerifyError::MalformedCose(
+                "nonce length is not 32",
+            ));
+        }
+
+        let parsed_payload = NitroAttestationPayload {
+            module_id: inner.module_id,
+            timestamp_unix_ms: inner.timestamp,
+            pcrs: inner.pcrs,
+            public_key: inner.public_key,
+            user_data: inner.user_data,
+            nonce: nonce_arr,
+        };
+
+        let kind = signature_kind_from_envelope(&envelope);
+
+        Ok(Self {
+            cose_sign1: envelope.raw,
+            parsed_payload,
+            leaf_certificate: inner.certificate,
+            cabundle: inner.cabundle,
+            signature: envelope.cose.signature.clone(),
+            signature_kind: kind,
+        })
+    }
+
+    /// Dispatcher: try COSE_Sign1 first; on parse failure, fall back to
+    /// detecting / constructing the mock JSON format.
+    ///
+    /// This is the entry point external verifiers should call when they
+    /// don't know which format the bytes were produced in.
+    ///
+    /// # Errors
+    ///
+    /// `AttestationVerifyError::MalformedCose` if both decoders refuse.
+    pub fn parse(bytes: &[u8]) -> Result<Self, AttestationVerifyError> {
+        if let Ok(doc) = Self::from_cose_sign1(bytes) {
+            return Ok(doc);
+        }
+        // Mock-JSON fallback: if `bytes` is a JSON-encoded
+        // `NitroAttestationPayload`, reconstruct the document with the
+        // raw bytes preserved. Note that mock construction requires
+        // signature + cert + cabundle out-of-band — `parse` cannot
+        // synthesize those for the mock path. Mock callers continue to
+        // use `NitroAttestationDoc::mock(...)` directly.
+        Err(AttestationVerifyError::MalformedCose(
+            "input is neither COSE_Sign1 CBOR nor recognized format",
+        ))
+    }
+}
+
+fn map_parse_err(e: &CoseParseError) -> AttestationVerifyError {
+    match e {
+        CoseParseError::MalformedEnvelope(_)
+        | CoseParseError::MalformedPayload(_)
+        | CoseParseError::MissingPayload => AttestationVerifyError::MalformedCose("CBOR parse"),
+        CoseParseError::MissingField(_) | CoseParseError::WrongFieldType { .. } => {
+            AttestationVerifyError::MalformedCose("missing or mistyped payload field")
+        }
+    }
+}
+
+/// Inspect the COSE_Sign1 protected header to decide which `SignatureKind`
+/// to label the parsed document with.
+///
+/// AWS Nitro production: ES384 (`-35`). Our test fixtures: EdDSA (`-8`).
+fn signature_kind_from_envelope(envelope: &CoseSign1Envelope) -> SignatureKind {
+    use coset::{iana, RegisteredLabelWithPrivate};
+    // ES384 → the deferred AWS Nitro production path (D47); everything
+    // else (EdDSA, unspecified, unknown) routes to the ed25519 path,
+    // matching what our test envelopes emit. Production verifiers would
+    // tighten this once the ES384 verifier lands.
+    match &envelope.cose.protected.header.alg {
+        Some(RegisteredLabelWithPrivate::Assigned(iana::Algorithm::ES384)) => {
+            SignatureKind::CoseSign1Es384
+        }
+        _ => SignatureKind::CoseSign1Ed25519,
+    }
+}
+
+/// **Stub** — walk the leaf cert + cabundle up to the supplied AWS Nitro
+/// root and verify the chain. Today this returns `Ok(())` and serves only
+/// as the typed seam for the M3-GA follow-up; see
+/// [D46](../../../docs/m3-decisions.md#d46).
+///
+/// # Errors
+///
+/// Never errors today. Future impl will return
+/// `AttestationVerifyError::CertChain` on chain-walk failure.
+pub fn verify_root_chain(
+    _leaf_cert: &[u8],
+    _cabundle: &[Vec<u8>],
+    _root: &'static [u8],
+) -> Result<(), AttestationVerifyError> {
+    // TODO(D46): walk `cabundle` from leaf to `_root`, validating each
+    // intermediate signature. Needs the AWS Nitro root cert embedded as
+    // `&'static [u8]` plus an X.509 chain walker (rustls-pki-types +
+    // webpki, both pure-Rust). Documented in docs/m3-decisions.md D46.
+    Ok(())
 }
 
 /// Parsed CBOR payload of a Nitro attestation document.
@@ -250,13 +444,29 @@ pub fn verify_attestation(
     max_age_ms: i64,
 ) -> Result<VerifiedAttestation, AttestationVerifyError> {
     // 1. Sanity: parsed_payload must round-trip from cose_sign1.
-    //    In the M3 skeleton, `cose_sign1` is JSON of the payload — for the
-    //    real COSE parser this becomes CBOR decoding. The check is the
-    //    same: re-parse, compare.
-    let reparsed: NitroAttestationPayload = serde_json::from_slice(&doc.cose_sign1)
-        .map_err(|_| AttestationVerifyError::MalformedCose("payload not JSON"))?;
-    if reparsed != doc.parsed_payload {
-        return Err(AttestationVerifyError::PayloadMismatch);
+    //    The check differs per signature kind: Mock re-parses the JSON;
+    //    CoseSign1 paths re-decode the CBOR payload and compare it to the
+    //    parsed mirror.
+    match doc.signature_kind {
+        SignatureKind::Mock => {
+            let reparsed: NitroAttestationPayload = serde_json::from_slice(&doc.cose_sign1)
+                .map_err(|_| AttestationVerifyError::MalformedCose("payload not JSON"))?;
+            if reparsed != doc.parsed_payload {
+                return Err(AttestationVerifyError::PayloadMismatch);
+            }
+        }
+        SignatureKind::CoseSign1Ed25519 | SignatureKind::CoseSign1Es384 => {
+            let envelope = parse_cose_sign1(&doc.cose_sign1).map_err(|e| map_parse_err(&e))?;
+            let inner = extract_payload(&envelope).map_err(|e| map_parse_err(&e))?;
+            if inner.module_id != doc.parsed_payload.module_id
+                || inner.timestamp != doc.parsed_payload.timestamp_unix_ms
+                || inner.pcrs != doc.parsed_payload.pcrs
+                || inner.public_key != doc.parsed_payload.public_key
+                || inner.user_data != doc.parsed_payload.user_data
+            {
+                return Err(AttestationVerifyError::PayloadMismatch);
+            }
+        }
     }
 
     // 2. PCR constraint.
@@ -276,24 +486,52 @@ pub fn verify_attestation(
         });
     }
 
-    // 4. Signature over cose_sign1 with leaf_certificate.
-    //
-    // M3 skeleton: leaf_certificate carries a raw ed25519 public key (32 B).
-    // Future PR replaces this with proper X.509 leaf-cert parsing + ECDSA
-    // P-384 verification per AWS Nitro spec.
-    verify_ed25519_signature(&doc.leaf_certificate, &doc.cose_sign1, &doc.signature)?;
+    // 4. Signature dispatch.
+    match doc.signature_kind {
+        SignatureKind::Mock => {
+            // M3 skeleton: leaf_certificate carries a raw ed25519 public
+            // key (32 B); signature is over the JSON cose_sign1 body.
+            verify_ed25519_signature(&doc.leaf_certificate, &doc.cose_sign1, &doc.signature)?;
+        }
+        SignatureKind::CoseSign1Ed25519 => {
+            // Real COSE_Sign1 envelope with ed25519 leaf key. The tbs_data
+            // computation is RFC 8152 §4.4; coset handles it.
+            let envelope = parse_cose_sign1(&doc.cose_sign1).map_err(|e| map_parse_err(&e))?;
+            verify_cose_signature(&envelope, &doc.leaf_certificate)
+                .map_err(|e| map_verify_err(&e))?;
+        }
+        SignatureKind::CoseSign1Es384 => {
+            // Stub — see D47. Routes through the typed surface so we can
+            // detect / log production envelopes today even though we
+            // cannot verify them yet.
+            let envelope = parse_cose_sign1(&doc.cose_sign1).map_err(|e| map_parse_err(&e))?;
+            verify_cose_signature_es384(&envelope, &doc.leaf_certificate)
+                .map_err(|e| map_verify_err(&e))?;
+        }
+    }
 
-    // 5. Cert-chain validation TODO. The M3 skeleton accepts any `cabundle`
-    //    that's non-empty. A future PR pulls in `webpki` + the pinned AWS
-    //    Nitro root and walks the chain. This is the single line that has
-    //    to land before production GA — see module docstring.
+    // 5. Cert-chain validation. The M3 skeleton accepts any `cabundle`
+    //    that's non-empty; the real chain-walk to the AWS Nitro root is
+    //    `verify_root_chain` — currently a stub. See D46.
     if doc.cabundle.is_empty() {
         return Err(AttestationVerifyError::CertChain);
     }
+    verify_root_chain(&doc.leaf_certificate, &doc.cabundle, &[])?;
 
     Ok(VerifiedAttestation {
         payload: doc.parsed_payload.clone(),
     })
+}
+
+fn map_verify_err(e: &CoseVerifyError) -> AttestationVerifyError {
+    match e {
+        CoseVerifyError::InvalidPublicKey | CoseVerifyError::InvalidSignature => {
+            AttestationVerifyError::InvalidSignature
+        }
+        CoseVerifyError::AlgorithmNotImplemented(_) => {
+            AttestationVerifyError::MalformedCose("signature algorithm not implemented (see D47)")
+        }
+    }
 }
 
 /// Verify a mock attestation document — for M1/M2 callers that still use
@@ -372,14 +610,39 @@ mod tests {
         let cose_sign1 = serde_json::to_vec(&payload).unwrap();
         let signature = leaf_sk.sign(&cose_sign1).to_bytes().to_vec();
         let trust_anchor = b"AWS-Nitro-Root-Cert-Stub-M3".to_vec();
-        let doc = NitroAttestationDoc {
+        let doc = NitroAttestationDoc::mock(
             cose_sign1,
-            parsed_payload: payload,
-            leaf_certificate: leaf_pk,
-            cabundle: vec![trust_anchor.clone()],
+            payload,
+            leaf_pk,
+            vec![trust_anchor.clone()],
             signature,
-        };
+        );
         (doc, trust_anchor, leaf_sk.to_bytes().to_vec())
+    }
+
+    fn build_valid_cose_doc(now_ms: i64) -> (NitroAttestationDoc, Vec<u8>) {
+        use crate::cose::{build_test_envelope, AttestationPayload};
+        let leaf_sk = SigningKey::from_bytes(&[7u8; 32]);
+        let leaf_pk = leaf_sk.verifying_key().to_bytes().to_vec();
+        let mut pcrs = BTreeMap::new();
+        for i in 0u8..=4 {
+            pcrs.insert(i, vec![0xAB ^ i; PCR_LEN]);
+        }
+        let payload = AttestationPayload {
+            module_id: "i-cose-test".into(),
+            timestamp: now_ms,
+            digest: "SHA384".into(),
+            pcrs,
+            certificate: leaf_pk.clone(),
+            cabundle: vec![vec![0xCA; 16]],
+            public_key: vec![1, 2, 3],
+            user_data: b"user-data".to_vec(),
+            nonce: vec![0u8; 32],
+        };
+        let bytes = build_test_envelope(&payload, &leaf_sk).expect("build envelope");
+        let doc = NitroAttestationDoc::from_cose_sign1(&bytes).expect("from_cose_sign1");
+        let trust_anchor = b"AWS-Nitro-Root-Cert-Stub-M3".to_vec();
+        (doc, trust_anchor)
     }
 
     #[test]
@@ -476,5 +739,108 @@ mod tests {
         let mut obs = BTreeMap::new();
         obs.insert(0u8, vec![0u8; PCR_LEN]);
         PcrConstraint::any().check(&obs).unwrap();
+    }
+
+    // ---------- real COSE_Sign1 path -----------------------------------------
+
+    #[test]
+    fn cose_happy_path_verifies() {
+        let now = 1_000_000;
+        let (doc, anchor) = build_valid_cose_doc(now);
+        assert_eq!(doc.signature_kind, SignatureKind::CoseSign1Ed25519);
+        let pcrs = PcrConstraint::pcr0_only({
+            let mut p0 = [0u8; PCR_LEN];
+            for b in &mut p0 {
+                *b = 0xAB;
+            }
+            p0
+        });
+        let verified = verify_attestation(&doc, &pcrs, &anchor, now, 60_000).expect("verifies");
+        assert_eq!(verified.payload.user_data, b"user-data");
+    }
+
+    #[test]
+    fn cose_rejects_pcr_mismatch() {
+        let now = 1_000_000;
+        let (doc, anchor) = build_valid_cose_doc(now);
+        let bad_pcr = [0xEEu8; PCR_LEN];
+        let pcrs = PcrConstraint::pcr0_only(bad_pcr);
+        let err = verify_attestation(&doc, &pcrs, &anchor, now, 60_000);
+        assert!(matches!(
+            err,
+            Err(AttestationVerifyError::PcrMismatch { index: 0 })
+        ));
+    }
+
+    #[test]
+    fn cose_rejects_stale_attestation() {
+        let now = 1_000_000;
+        let (doc, anchor) = build_valid_cose_doc(now);
+        let err = verify_attestation(&doc, &PcrConstraint::any(), &anchor, now + 120_000, 60_000);
+        assert!(matches!(
+            err,
+            Err(AttestationVerifyError::StaleAttestation { .. })
+        ));
+    }
+
+    #[test]
+    fn cose_rejects_signature_tamper() {
+        let now = 1_000_000;
+        let (mut doc, anchor) = build_valid_cose_doc(now);
+        // Tamper the last byte (in the signature region of the CBOR envelope).
+        let last = doc.cose_sign1.len() - 1;
+        doc.cose_sign1[last] ^= 0xFF;
+        let err = verify_attestation(&doc, &PcrConstraint::any(), &anchor, now, 60_000);
+        assert_eq!(err, Err(AttestationVerifyError::InvalidSignature));
+    }
+
+    #[test]
+    fn cose_rejects_payload_mirror_tamper() {
+        // The parsed mirror must match what re-decoding the CBOR returns;
+        // changing only the mirror but leaving the envelope alone must
+        // fail the round-trip check before the signature check.
+        let now = 1_000_000;
+        let (mut doc, anchor) = build_valid_cose_doc(now);
+        doc.parsed_payload.user_data = b"changed".to_vec();
+        let err = verify_attestation(&doc, &PcrConstraint::any(), &anchor, now, 60_000);
+        assert_eq!(err, Err(AttestationVerifyError::PayloadMismatch));
+    }
+
+    #[test]
+    fn cose_rejects_malformed_envelope_bytes() {
+        let bad = b"not a valid COSE envelope";
+        let err = NitroAttestationDoc::from_cose_sign1(bad);
+        assert!(matches!(err, Err(AttestationVerifyError::MalformedCose(_))));
+    }
+
+    #[test]
+    fn cose_es384_doc_routes_to_not_implemented_stub() {
+        // Hand-build a CoseSign1Es384 doc — we can't actually produce a
+        // valid ES384 signature today, but the dispatch surface should
+        // route through the stub and surface the deferred-algo error.
+        let now = 1_000_000;
+        let (mut doc, anchor) = build_valid_cose_doc(now);
+        doc.signature_kind = SignatureKind::CoseSign1Es384;
+        let err = verify_attestation(&doc, &PcrConstraint::any(), &anchor, now, 60_000);
+        // ES384 stub → MalformedCose("…not implemented…").
+        assert!(matches!(err, Err(AttestationVerifyError::MalformedCose(_))));
+    }
+
+    #[test]
+    fn signature_kind_defaults_to_mock_for_back_compat() {
+        // Documents serialized before SignatureKind existed deserialize
+        // with the field defaulted to Mock.
+        let json = r#"{
+            "cose_sign1": [],
+            "parsed_payload": {
+                "module_id":"x","timestamp_unix_ms":0,"pcrs":{},
+                "public_key":[],"user_data":[],"nonce":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]
+            },
+            "leaf_certificate": [],
+            "cabundle": [],
+            "signature": []
+        }"#;
+        let doc: NitroAttestationDoc = serde_json::from_str(json).expect("legacy parse");
+        assert_eq!(doc.signature_kind, SignatureKind::Mock);
     }
 }

@@ -54,6 +54,11 @@ primitive-types.workspace = true
 # enclave so the verifier does not trust the host's pre-decoded `value`).
 alloy-rlp.workspace = true
 
+# COSE_Sign1 / CBOR parsing for real Nitro attestation envelopes.
+# See docs/m3-decisions.md D24 + D46.
+coset.workspace = true
+ciborium.workspace = true
+
 [features]
 # Real Nitro Enclaves backend (requires Linux + AWS Nitro-enabled host).
 # Off by default so non-Linux dev still compiles. See enclaves/nitro.rs.

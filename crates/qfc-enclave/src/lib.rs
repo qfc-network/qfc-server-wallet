@@ -42,6 +42,7 @@
 #![allow(clippy::manual_slice_fill)]
 
 pub mod attestation;
+pub mod cose;
 pub mod derivation;
 pub mod enclave;
 pub mod enclaves;
@@ -52,6 +53,10 @@ pub mod signers;
 pub mod verify_attestation;
 
 pub use attestation::{AttestationDoc, AttestationPayload, MockAttestationKey};
+pub use cose::{
+    parse_cose_sign1, verify_cose_signature, verify_cose_signature_es384, CoseParseError,
+    CoseSign1Envelope, CoseVerifyError,
+};
 pub use derivation::{derive_classical, mnemonic_to_seed, ClassicalDerivation};
 pub use enclave::{
     Enclave, EnclaveApproval, EnclaveApprovalDecision, EnclaveError, EnclaveSignRequest,
@@ -68,6 +73,6 @@ pub use signers::{
     Secp256k1Signer, ML_DSA_SEED_BYTES,
 };
 pub use verify_attestation::{
-    verify_attestation, verify_mock_attestation, AttestationVerifyError, NitroAttestationDoc,
-    PcrConstraint, VerifiedAttestation,
+    verify_attestation, verify_mock_attestation, verify_root_chain, AttestationVerifyError,
+    NitroAttestationDoc, PcrConstraint, SignatureKind, VerifiedAttestation,
 };

@@ -488,3 +488,97 @@ with empty defaults when ceilings aren't passed.
   payload is the cleanest cut.
 
 ---
+
+## D46 — AWS Nitro root cert chain validation stays deferred; `verify_root_chain` lands as a typed stub
+
+**What:** The COSE_Sign1 follow-up (`feat/cose-sign1-parse`) lands real
+CBOR parsing + ed25519 envelope verification, but **does not** walk the
+leaf cert + cabundle up to the AWS Nitro root. A new free function
+`qfc_enclave::verify_attestation::verify_root_chain(leaf, cabundle, root)`
+exists as the typed seam and returns `Ok(())` with a `TODO(D46)` comment.
+
+**Why:** Three reasons.
+1. **Need the AWS Nitro root cert.** AWS distributes the root via the
+   `nitro-cli` toolchain (a 7-year cert; current root expires
+   2027-04-21). Bundling it requires a one-time provenance step plus an
+   internal review of "is this the right root, did anyone tamper with
+   the source we pulled it from". That work is gated on an AWS account
+   the brief explicitly excludes from this PR.
+2. **No live AWS attestation to test against.** Without real Nitro
+   output, we can't even integration-test a chain walker — only
+   synthetic chains, which are exactly what an X.509 walker is most
+   prone to false-negative on.
+3. **Webpki vs custom walker is itself a decision.** `webpki` is the
+   obvious choice (pure-Rust; already in the workspace via rustls),
+   but the AWS Nitro chain uses ES384 leaves which webpki only added
+   support for after v0.22. We need to confirm the pinned webpki
+   version covers ES384 + that its trust-anchor parse accepts the
+   AWS root's curve params before committing.
+
+The typed seam ships today so the integration point is fixed: the
+M3-GA PR drops in a real implementation against a known signature,
+and the call site in `verify_attestation` already routes through it.
+
+**Alternatives considered:**
+- Land a fake walker that accepts any chain. Rejected — would invite
+  callers to assume the verifier is doing work it isn't.
+- Use a placeholder root + crate "any cert chains to it" verifier.
+  Rejected — same false-confidence problem.
+- Wait to land the COSE parser until the root + walker are ready.
+  Rejected — the parse and verify are independently useful (e.g. for
+  attestation-doc introspection tools that don't need root validation).
+
+---
+
+## D47 — ECDSA-P384 (ES384) deferred; ed25519 ships first; `SignatureKind` makes the dispatch explicit
+
+**What:** The new COSE_Sign1 path verifies ed25519 signatures via
+`verify_cose_signature`. AWS Nitro production uses ECDSA-P384 (ES384);
+`verify_cose_signature_es384` exists as a stub returning
+`CoseVerifyError::AlgorithmNotImplemented`. The `SignatureKind` enum
+carries three variants — `Mock`, `CoseSign1Ed25519`, `CoseSign1Es384` —
+so callers can detect ES384 envelopes today even though we can't verify
+them.
+
+**Why:** Three reasons.
+1. **Our test envelopes are ed25519.** The mock attestation flow
+   (`MockAttestationKey`) is ed25519. The PolicyServiceSigner is
+   ed25519. The HybridVerifier verifies ed25519 approvals. Adding ES384
+   to the verifier without a single ES384 fixture to test it on adds
+   surface area we can't exercise.
+2. **No AWS to capture a real ES384 envelope from.** Same constraint
+   as D46 — without an AWS account, the only ES384 fixtures we can
+   generate are synthetic ones we'd be both signing and verifying,
+   which proves nothing about wire-format compatibility with what AWS
+   actually emits.
+3. **The wire format is identical.** `coset` already parses ES384
+   envelopes (the `protected.header.alg` field surfaces the algorithm).
+   `tbs_data` construction is curve-agnostic. The only line that
+   changes is the verifier inside `verify_cose_signature_es384` —
+   roughly `p384::ecdsa::VerifyingKey::from_sec1_bytes(...).verify(...)`.
+   We can land that in a one-file diff the day we have a real AWS
+   capture.
+
+The `SignatureKind::CoseSign1Es384` variant exists today so:
+- `NitroAttestationDoc::from_cose_sign1` correctly labels envelopes
+  whose `protected.alg = -35` as ES384 (per IANA COSE algorithm
+  registry).
+- `verify_attestation` routes ES384 documents through the stub and
+  surfaces `MalformedCose("signature algorithm not implemented (see
+  D47)")` — distinguishable from a real signature failure.
+- Consumers of the attestation library can detect ES384 envelopes
+  and decide whether to fall back to a different verification path
+  or wait for the AWS root cert chain integration.
+
+**Alternatives considered:**
+- Land ES384 verifier on synthetic test vectors. Rejected — gives
+  false confidence; the only thing it would test is that our own
+  signer agrees with our own verifier.
+- Make `SignatureKind` boolean-ish (`Mock` vs `Real`) and dispatch
+  curve inside the COSE path. Rejected — the enum surfaces "we know
+  this is the ES384 format but can't verify it" at the type level,
+  which is what downstream consumers actually want to know.
+- Hold the whole COSE PR until ES384 is ready. Rejected — see D46
+  for the same independence argument.
+
+---
