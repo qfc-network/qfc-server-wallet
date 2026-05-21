@@ -60,3 +60,16 @@ jobs:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - uses: Swatinem/rust-cache@v2
       - run: cargo doc --workspace --no-deps --all-features
+
+  # Guards `clients/wallet-grpc-rs/proto/` against drifting away from the
+  # canonical protos under `crates/qfc-server-wallet/proto/`. The SDK
+  # ships a copy (not a symlink — see docs/clients-decisions.md D55) so
+  # production forks are self-contained. Re-running the sync script
+  # against an in-sync checkout must produce a zero diff.
+  proto-sync-check:
+    name: proto-sync-check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: tools/sync-protos.sh
+      - run: git diff --exit-code

@@ -144,3 +144,95 @@ signer modules.
 outside the workspace is more friction than it's worth at this scope.
 The TS fixture pinning catches the case CI would catch (preimage
 drift); everything else is conventional unit testing.
+
+## D55 — gRPC client SDK carries a copy of the protos, not a symlink
+
+`clients/wallet-grpc-rs/proto/{common,wallet,approver}.proto` are byte-
+for-byte copies of `crates/qfc-server-wallet/proto/*.proto`, not
+symlinks. `tools/sync-protos.sh` refreshes the copy and a CI job
+(`proto-sync-check`) runs the script then asserts `git diff
+--exit-code` on the worktree.
+
+**Why.** The SDK lives outside the workspace (`workspace.exclude`
+includes it) so the wallet's dep tree doesn't leak into production
+forks. The protos belong at `crates/qfc-server-wallet/proto/` (the
+canonical home — that's where the server-side `tonic-build` reads
+them). Three options for the SDK:
+
+1. **Symlink.** Smallest diff, but cross-platform pain on Windows (NTFS
+   junctions, line-ending conversion of the resolved target, gitconfig
+   `core.symlinks` toggles). Production fork-and-cd users would hit
+   surprises.
+2. **`tonic-build` reads `../../crates/qfc-server-wallet/proto/`
+   directly.** Builds work in the current checkout but break when the
+   SDK is forked / copied / cargo-publish'd — anything that severs the
+   sibling-directory assumption.
+3. **Copy + CI sync check.** Boring, robust, contributors who edit the
+   proto get a CI failure that says exactly what to do
+   (`tools/sync-protos.sh && git add clients/wallet-grpc-rs/proto/`).
+
+We picked (3). The cost is one extra `git status` line whenever the
+server-side proto changes; the value is the SDK directory is self-
+contained.
+
+## D56 — SDK depends on `qfc-server-wallet` in `[dev-dependencies]` only
+
+`clients/wallet-grpc-rs/Cargo.toml` has a `[dev-dependencies]` entry
+for `qfc-server-wallet` (and its sibling crates) so the e2e tests can
+spin up a real tonic server in-process. The runtime `[dependencies]`
+list stays clean — production users get tonic, prost, tokio, http,
+tower, thiserror, and the auto-generated stubs. That's it.
+
+**Why.** The whole point of the standalone-workspace pattern (D46) is
+that production integrators don't inherit the wallet's dep tree.
+Mocking the server-side handlers would either re-implement most of
+`WalletService` (and drift) or stand up a fake that doesn't actually
+exercise the wire (and miss real issues). A dev-dep on the wallet
+crate keeps the test fidelity high without leaking into the runtime
+graph: `cargo build` against the SDK pulls zero wallet code; only
+`cargo test` does. This is the same trade-off the server-side
+integration tests have already accepted with their `wiremock` + `hyper`
+dev-deps.
+
+## D57 — Local SDK types (`CreateWalletParams`, `Signed`, …) instead of re-exporting `qfc_wallet_types::WalletId`
+
+The SDK exposes `WalletClient::create_wallet(params: CreateWalletParams)`
+where `CreateWalletParams` is a local struct with primitive-typed
+fields (`scheme: SigningScheme`, `threshold: u32`, …). The
+alternative would be to re-export `qfc_wallet_types::{WalletId,
+SigningScheme, …}` and have the SDK speak those domain types directly.
+
+**Why.** Same shape as the approver-clients D48: pulling
+`qfc-wallet-types` into the SDK's `[dependencies]` reintroduces the
+workspace's ULID + serde + hex dep web. The SDK's job is to wrap the
+wire types, not to mirror the domain. Where the proto type is already
+ergonomic (e.g. `ApproverIdentity` — the proto's `oneof` is a clean
+Rust enum), we re-export it verbatim. Where it isn't (raw `i32` enum
+slots, `Option<*View>` envelopes), we wrap. The wrappers are a couple
+dozen lines, mechanical, and the e2e tests catch any drift.
+
+`WalletId` etc. are strings on the wire (proto3 carries them as
+`string`). Production callers can newtype them locally if they want —
+but the SDK doesn't force a particular newtype on them.
+
+## D58 — Typed `SdkError` with specific variants for the common gRPC status codes
+
+`SdkError` has named variants for `Unauthenticated`, `PermissionDenied`,
+`NotFound`, `AlreadyExists`, `InvalidArgument`, `FailedPrecondition`,
+`Aborted`, `Internal`, plus catch-all `Rpc(Status)` and transport /
+client-side variants (`Transport`, `BadInput`). `From<tonic::Status>`
+dispatches on `status.code()` and only falls through to `Rpc(_)` for
+codes we don't translate (Cancelled, DeadlineExceeded,
+ResourceExhausted, etc — most users don't care about these).
+
+**Why.** The server-side `convert::map_service_error` is the
+authoritative status-code mapping (see `docs/grpc-api.md` "Status-code
+mapping"). Mirroring those exact codes on the client side means
+`match err { SdkError::NotFound(_) => … }` works, without callers
+having to learn `tonic::Code` first. The catch-all `Rpc(Status)`
+preserves the original status if we miss a code, so no information is
+lost.
+
+We `#![allow(clippy::result_large_err)]` at the crate root with a
+one-line comment pointing here; `tonic::Status` is intrinsically ~176
+bytes so this is the standard tonic-flavored ergonomic trade-off.

@@ -1,0 +1,169 @@
+// Approver / approver-set / approval RPCs (M4 quorum surface).
+//
+// Mirrors the HTTP routes:
+//   POST   /approvers                              -> RegisterApprover
+//   DELETE /approvers/{id}                         -> RevokeApprover
+//   GET    /approvers/{id}                         -> GetApprover
+//   GET    /approvers?owner=                       -> ListApprovers
+//   POST   /approver-sets                          -> CreateApproverSet
+//   GET    /approver-sets/{id}                     -> GetApproverSet
+//   GET    /approver-sets?owner=                   -> ListApproverSets
+//   POST   /requests/{request_id}/approvals        -> SubmitApproval
+//   GET    /requests/{request_id}/approvals        -> ListApprovals
+
+syntax = "proto3";
+
+package qfc.wallet.v1;
+
+import "common.proto";
+
+service Approver {
+  rpc RegisterApprover(RegisterApproverRequest) returns (RegisterApproverResponse);
+  rpc RevokeApprover(RevokeApproverRequest) returns (RevokeApproverResponse);
+  rpc GetApprover(GetApproverRequest) returns (GetApproverResponse);
+  rpc ListApprovers(ListApproversRequest) returns (ListApproversResponse);
+
+  rpc CreateApproverSet(CreateApproverSetRequest) returns (CreateApproverSetResponse);
+  rpc GetApproverSet(GetApproverSetRequest) returns (GetApproverSetResponse);
+  rpc ListApproverSets(ListApproverSetsRequest) returns (ListApproverSetsResponse);
+
+  rpc SubmitApproval(SubmitApprovalRequest) returns (SubmitApprovalResponse);
+  rpc ListApprovals(ListApprovalsRequest) returns (ListApprovalsResponse);
+}
+
+// --- ApproverView --------------------------------------------------------
+
+message ApproverView {
+  string approver_id = 1;
+  ApproverIdentity identity = 2;
+  SigningScheme scheme = 3;
+  string label = 4;
+  string owner_id = 5;
+  // Empty string when not set.
+  string webhook_url = 6;
+  ApproverStatus status = 7;
+  int64 added_at_unix_ms = 8;
+}
+
+message RegisterApproverRequest {
+  ApproverIdentity identity = 1;
+  string label = 2;
+  string owner_id = 3;
+  // Optional. Empty string = no webhook.
+  string webhook_url = 4;
+}
+
+message RegisterApproverResponse {
+  ApproverView approver = 1;
+}
+
+message RevokeApproverRequest {
+  string approver_id = 1;
+}
+
+message RevokeApproverResponse {}
+
+message GetApproverRequest {
+  string approver_id = 1;
+}
+
+message GetApproverResponse {
+  ApproverView approver = 1;
+}
+
+message ListApproversRequest {
+  string owner = 1;
+  bool include_revoked = 2;
+}
+
+message ListApproversResponse {
+  repeated ApproverView approvers = 1;
+}
+
+// --- ApproverSetView -----------------------------------------------------
+
+message ApproverSetView {
+  string approver_set_id = 1;
+  string name = 2;
+  string owner_id = 3;
+  repeated string members = 4;
+  uint32 threshold = 5;
+  uint32 total = 6;
+  // 0 = none (fall back to service default).
+  uint32 quorum_timeout_secs = 7;
+  int64 created_at_unix_ms = 8;
+}
+
+message CreateApproverSetRequest {
+  string name = 1;
+  string owner_id = 2;
+  repeated string members = 3;
+  uint32 threshold = 4;
+  uint32 total = 5;
+  // 0 = unset.
+  uint32 quorum_timeout_secs = 6;
+}
+
+message CreateApproverSetResponse {
+  ApproverSetView approver_set = 1;
+}
+
+message GetApproverSetRequest {
+  string approver_set_id = 1;
+}
+
+message GetApproverSetResponse {
+  ApproverSetView approver_set = 1;
+}
+
+message ListApproverSetsRequest {
+  string owner = 1;
+}
+
+message ListApproverSetsResponse {
+  repeated ApproverSetView approver_sets = 1;
+}
+
+// --- Approval submission -------------------------------------------------
+
+message SubmitApprovalRequest {
+  string request_id = 1;
+  string approver_id = 2;
+  string approval_id = 3;
+  ApprovalDecision decision = 4;
+  // Raw signature bytes over the canonical preimage (see
+  // SignedApproval::signing_preimage in qfc-quorum).
+  bytes signature = 5;
+  int64 timestamp_unix_ms = 6;
+  // 32 bytes.
+  bytes message_hash = 7;
+  // Redundant cross-check against the registered identity for `approver_id`.
+  ApproverIdentity identity = 8;
+}
+
+message SubmitApprovalResponse {
+  // true when newly persisted; false on idempotent resubmission.
+  bool recorded = 1;
+  string approval_id = 2;
+}
+
+message ApprovalView {
+  string approval_id = 1;
+  string request_id = 2;
+  ApproverIdentity approver = 3;
+  // Stable identity key (audit anchor; matches `ApproverIdentity::key()`).
+  string approver_key = 4;
+  ApprovalDecision decision = 5;
+  // 32 bytes.
+  bytes message_hash = 6;
+  int64 timestamp_unix_ms = 7;
+  bytes signature = 8;
+}
+
+message ListApprovalsRequest {
+  string request_id = 1;
+}
+
+message ListApprovalsResponse {
+  repeated ApprovalView approvals = 1;
+}
