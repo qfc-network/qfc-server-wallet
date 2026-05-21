@@ -18,10 +18,12 @@ members = [
 # The `clients/approver-rs/` directory is the reference approver-side
 # Rust client (M4 deliverable). It's intentionally excluded so production
 # integrators can fork it as a starting point without having to inherit
-# the entire wallet workspace. The `tools/gen-golden-vectors/` binary is
-# excluded for the same reason — it generates cross-language test
+# the entire wallet workspace. `clients/wallet-grpc-rs/` is the gRPC
+# client SDK (M4 follow-up), excluded for the same reason — see
+# docs/clients-decisions.md D55. The `tools/gen-golden-vectors/` binary
+# is excluded for the same reason — it generates cross-language test
 # fixtures and is not part of the server build.
-exclude = ["enclave", "clients/approver-rs", "tools/gen-golden-vectors"]
+exclude = ["enclave", "clients/approver-rs", "clients/wallet-grpc-rs", "tools/gen-golden-vectors"]
 
 [workspace.package]
 version = "0.0.0"

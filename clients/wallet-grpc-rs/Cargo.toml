@@ -1,0 +1,78 @@
+# Standalone crate — intentionally NOT a member of the main
+# qfc-server-wallet workspace. Production integrators fork this
+# directory as a starting point and shouldn't inherit the whole wallet
+# dependency tree. The empty `[workspace]` table makes cargo treat this
+# Cargo.toml as a workspace root in its own right.
+[workspace]
+
+[package]
+name = "qfc-wallet-grpc"
+version = "0.1.0"
+edition = "2021"
+authors = ["QFC Network <maintainers@qfc.network>"]
+license = "Apache-2.0"
+description = "Reference gRPC client SDK for the QFC server wallet (M4 follow-up to PR #23)."
+repository = "https://github.com/qfc-network/qfc-server-wallet"
+publish = false
+
+[lib]
+name = "qfc_wallet_grpc"
+path = "src/lib.rs"
+
+[dependencies]
+# tonic 0.12 / prost 0.13 to align with the server-side workspace pin
+# (docs/grpc-decisions.md D50). Bumping in lockstep with the server.
+tonic = "0.12"
+prost = "0.13"
+prost-types = "0.13"
+
+# Async runtime — used by the client builder + interceptor wiring.
+tokio = { version = "1.40", features = ["sync", "rt-multi-thread", "macros", "time"] }
+
+# Errors
+thiserror = "1.0"
+
+# `http` for the `Uri` newtype tonic's `Endpoint` accepts.
+http = "1"
+
+# Tower stack (needed for the InterceptedService wrapper).
+tower = "0.5"
+
+[build-dependencies]
+# Generated stubs land in OUT_DIR and are pulled in via
+# `tonic::include_proto!("qfc.wallet.v1")` at compile time.
+tonic-build = "0.12"
+
+[dev-dependencies]
+# In-process server for the e2e tests — depending on the wallet crate
+# only as a dev-dep is the whole point of this SDK
+# (see docs/clients-decisions.md D56).
+qfc-server-wallet = { path = "../../crates/qfc-server-wallet" }
+qfc-audit = { path = "../../crates/qfc-audit" }
+qfc-enclave = { path = "../../crates/qfc-enclave" }
+qfc-policy = { path = "../../crates/qfc-policy" }
+qfc-quorum = { path = "../../crates/qfc-quorum" }
+qfc-sss = { path = "../../crates/qfc-sss" }
+qfc-wallet-types = { path = "../../crates/qfc-wallet-types" }
+
+tempfile = "3.10"
+tokio-stream = { version = "0.1", features = ["net"] }
+ed25519-dalek = { version = "2.1", features = ["rand_core"] }
+time = { version = "0.3" }
+rand = "0.8"
+
+[[example]]
+name = "create_wallet"
+path = "examples/create_wallet.rs"
+
+[[example]]
+name = "sign_message"
+path = "examples/sign_message.rs"
+
+[[example]]
+name = "submit_approval"
+path = "examples/submit_approval.rs"
+
+[[example]]
+name = "list_audit_events"
+path = "examples/list_audit_events.rs"

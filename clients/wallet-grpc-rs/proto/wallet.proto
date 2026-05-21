@@ -1,0 +1,118 @@
+// Wallet RPCs: create, fetch, sign, audit query.
+//
+// Mirrors the HTTP routes:
+//   POST /wallets                 -> CreateWallet
+//   GET  /wallets/{id}            -> GetWallet
+//   POST /wallets/{id}/sign       -> Sign
+//   GET  /audit/events            -> GetAuditEvents
+//
+// Auth: same `x-api-key` allow-list as the HTTP surface. The gRPC
+// interceptor (`grpc::auth`) reads the metadata key on every RPC.
+
+syntax = "proto3";
+
+package qfc.wallet.v1;
+
+import "common.proto";
+
+service Wallet {
+  // Create a new wallet end-to-end (enclave generates, SSS persists, audit
+  // logs `WalletCreated`).
+  rpc CreateWallet(CreateWalletRequest) returns (CreateWalletResponse);
+
+  // Fetch a wallet record by ULID.
+  rpc GetWallet(GetWalletRequest) returns (GetWalletResponse);
+
+  // Sign a payload under wallet `wallet_id`. Walks the full policy +
+  // quorum + enclave path per RFC §4.3.
+  rpc Sign(SignRequest) returns (SignResponse);
+
+  // Read recent audit events. Mirrors the HTTP query parameters.
+  rpc GetAuditEvents(GetAuditEventsRequest) returns (GetAuditEventsResponse);
+}
+
+// Inputs to `CreateWallet`.
+message CreateWalletRequest {
+  SigningScheme scheme = 1;
+  uint32 threshold = 2;
+  uint32 total = 3;
+  string display_name = 4;
+  string owner_id = 5;
+  // ULID; omit (empty string) to let the service allocate one.
+  string policy_id = 6;
+}
+
+// Wallet view (matches the JSON `WalletView` 1:1).
+message WalletView {
+  string wallet_id = 1;
+  SigningScheme scheme = 2;
+  uint32 threshold = 3;
+  uint32 total = 4;
+  string display_name = 5;
+  string owner_id = 6;
+  string policy_id = 7;
+  // Raw bytes (32 for ed25519, 33 compressed secp256k1, etc).
+  bytes master_public_key = 8;
+  WalletStatus status = 9;
+  int64 created_at_unix_ms = 10;
+}
+
+message CreateWalletResponse {
+  WalletView wallet = 1;
+}
+
+message GetWalletRequest {
+  string wallet_id = 1;
+}
+
+message GetWalletResponse {
+  WalletView wallet = 1;
+}
+
+message SignRequest {
+  string wallet_id = 1;
+  SigningPayload payload = 2;
+  Requester requester = 3;
+  // Empty string = no derivation (required for PQ schemes).
+  string hd_path = 4;
+  HashAlg hash_alg = 5;
+  // Optional; omit to use defaults.
+  SigningContext context = 6;
+}
+
+message SignResponse {
+  // Raw signature bytes (curve-dependent length).
+  bytes signature = 1;
+  // Raw public key bytes the signature was produced under.
+  bytes public_key = 2;
+  // JSON-encoded attestation document (UTF-8). Preserves the same
+  // structure HTTP callers see.
+  string attestation_json = 3;
+}
+
+message GetAuditEventsRequest {
+  // If non-empty, only return events whose `wallet_id` matches.
+  string wallet_id = 1;
+  // Default 100, cap 1000.
+  uint32 limit = 2;
+}
+
+message AuditEventView {
+  string event_id = 1;
+  // SHA-256 raw bytes (32).
+  bytes prev_event_hash = 2;
+  int64 timestamp_unix_ms = 3;
+  // JSON-encoded `qfc_audit::Actor`. UTF-8.
+  string actor_json = 4;
+  AuditKind kind = 5;
+  string request_id = 6;
+  string wallet_id = 7;
+  // JSON-encoded per-kind details. UTF-8.
+  string details_json = 8;
+  // Raw ed25519 server signature.
+  bytes server_signature = 9;
+}
+
+message GetAuditEventsResponse {
+  repeated AuditEventView events = 1;
+}
