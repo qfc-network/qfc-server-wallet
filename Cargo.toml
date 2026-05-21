@@ -80,7 +80,11 @@ borsh = { version = "1.5", features = ["derive"] }
 
 # Hashing
 blake3 = "1.5"
-sha2 = "0.10"
+# `oid` enables `digest::AssociatedOid for Sha384` (and other SHA-2
+# variants), which the x509-cert builder needs when generating ECDSA-P384
+# leaf certs in our ES384 test path. Off in the wider tree pre-D47; turning
+# it on is feature-additive (no API change for existing consumers).
+sha2 = { version = "0.10", features = ["oid"] }
 sha3 = "0.10"
 hmac = "0.12"
 
@@ -105,6 +109,13 @@ base64 = "0.22"
 # directly to encode/decode the inner attestation payload Map<u8 -> Value>.
 coset = "0.4"
 ciborium = "0.2"
+
+# ECDSA P-384 (ES384) + X.509 — Nitro production attestation verification.
+# See docs/m3-decisions.md D47 (ES384 verifier) + D48 (p384 + x509-cert
+# vs. ring / webpki). Both crates are pure-Rust RustCrypto (no FFI, no
+# OpenSSL, no liboqs — matches RFC §1.5).
+p384 = { version = "0.13", default-features = false, features = ["ecdsa", "pem", "std", "digest"] }
+x509-cert = { version = "0.2", default-features = false, features = ["std", "pem", "builder"] }
 
 # EVM / RLP
 alloy-rlp = "0.3"

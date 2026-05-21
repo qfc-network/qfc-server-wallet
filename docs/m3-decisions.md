@@ -530,7 +530,25 @@ and the call site in `verify_attestation` already routes through it.
 
 ---
 
-## D47 — ECDSA-P384 (ES384) deferred; ed25519 ships first; `SignatureKind` makes the dispatch explicit
+## D47 — ECDSA-P384 (ES384) deferred; ed25519 ships first; `SignatureKind` makes the dispatch explicit — **CLOSED 2026-05-21**
+
+**Status:** CLOSED in `feat/cose-es384-verifier`. The original deferral
+text below is preserved for the historical record;
+`verify_cose_signature_es384` now does real ECDSA-P384 verification
+against the leaf cert's `SubjectPublicKeyInfo`. The `SignatureKind`
+dispatch hasn't changed — `CoseSign1Es384` documents continue to route
+through that function, but the function no longer returns
+`AlgorithmNotImplemented`. Test coverage: 7 unit tests in
+`crates/qfc-enclave/src/cose.rs` (round-trip, tampered signature,
+tampered payload, wrong-leaf-cert, truncated cert, garbage cert,
+truncated signature) + 3 E2E tests in
+`crates/qfc-enclave/src/verify_attestation.rs` (happy path, stale,
+PCR-mismatch). The remaining M3-GA deferral is the root-cert chain walk
+([D46](#d46)) — out of scope here.
+
+---
+
+**Original (deferred) text below — kept for the record.**
 
 **What:** The new COSE_Sign1 path verifies ed25519 signatures via
 `verify_cose_signature`. AWS Nitro production uses ECDSA-P384 (ES384);
@@ -580,5 +598,139 @@ The `SignatureKind::CoseSign1Es384` variant exists today so:
   which is what downstream consumers actually want to know.
 - Hold the whole COSE PR until ES384 is ready. Rejected — see D46
   for the same independence argument.
+
+---
+
+## D48 — Choose `p384` + `x509-cert` over `webpki` + `ring` for the ES384 verifier
+
+**What:** The closed-in-this-PR `verify_cose_signature_es384` uses two
+RustCrypto crates: `p384` (pure-Rust NIST P-384 curve arithmetic + ECDSA
+verifier) and `x509-cert` (pure-Rust X.509 DER decoder). Both are
+Apache-2.0 / MIT dual-licensed, no FFI, no OpenSSL, no `aws-lc-sys`, no
+`ring`. The whole verifier compiles cleanly under
+`#![forbid(unsafe_code)]`.
+
+**Why:** RFC §1.5 calls out the in-enclave dep discipline: no OpenSSL,
+no liboqs FFI, pure-Rust crypto where possible. The two obvious
+alternatives both violate that:
+
+- **`webpki` + `ring`.** `ring` ships hand-rolled assembly for x86_64 +
+  aarch64 ECDSA primitives. It's fast and well-audited, but it's
+  inline-asm FFI, which puts it on the wrong side of the
+  `#![forbid(unsafe_code)]` line in the crate. `webpki` itself is
+  pure-Rust but its verification path delegates to `ring`'s primitives.
+- **`webpki` + `aws-lc-rs`.** Same shape, swapping the asm backend.
+  Same issue: FFI surface.
+
+`p384` is the canonical pure-Rust P-384 implementation from the
+RustCrypto org. `x509-cert` is its sibling project for the X.509 layer.
+Together they cover the leaf-cert-only verification path this PR
+implements (SPKI extraction → `VerifyingKey::from_sec1_bytes` →
+`verify(tbs_data, &signature)`).
+
+Performance: the P-384 verify is roughly an order of magnitude slower
+than ring's, but we run one verify per attestation (a handful per sign
+flow), so the bottleneck is the SSS-combine + curve sign, not the
+attestation check.
+
+The same `webpki` swap may be reconsidered when D46 (root-cert chain
+walk) lands — that's a different verifier with different perf
+characteristics. Documented inline at the `verify_cose_signature_es384`
+call site so the next person knows the trade-off.
+
+**Alternatives considered:**
+- `webpki` + `ring` — rejected; FFI surface (see above).
+- `webpki` + `aws-lc-rs` — rejected; same FFI argument.
+- Hand-rolled P-384 ECDSA — rejected; security primitive, do not
+  reinvent.
+- `openssl` crate — rejected; explicitly banned by RFC §1.5 + by
+  `deny.toml`.
+
+---
+
+## D49 — `x509-cert::builder` for test cert generation (no `rcgen`, no `ring`)
+
+**What:** The ES384 test path generates a self-signed P-384 leaf cert
+synchronously inside the test using `x509-cert`'s `builder` feature,
+which integrates with `p384::ecdsa::SigningKey` via the
+RustCrypto-standard `signature` traits. The test helper
+`tests_helpers::es384_keypair_and_cert(seed_byte)` returns
+`(SigningKey, Vec<u8>)` — the signer plus the DER-encoded cert.
+
+**Why:** The two obvious test-cert generators are `rcgen` and
+hand-rolling X.509 in pure RustCrypto.
+
+- **`rcgen`** is the well-known Rust X.509 generator (used by `rustls`'s
+  test suite, `webpki`'s test fixtures, etc.). It requires either
+  `ring` or `aws-lc-rs` for its crypto backend — both are FFI. To use
+  it in a `#![forbid(unsafe_code)]` crate (even as a dev-dep) we'd be
+  importing the FFI surface for tests, which is at least cosmetically
+  at odds with the discipline. `rcgen` also generates raw P-256 / P-384
+  keys via its bundled crypto; we'd have to round-trip our own
+  `p384::SigningKey` through PEM to feed it in.
+- **Hand-rolled X.509 in `der`** — possible but tedious; the TBS
+  structure has half a dozen mandatory fields, and any mismatch in OID
+  encoding silently breaks SPKI parsing.
+
+`x509-cert::builder` is the pure-Rust path that already accepts our
+`p384::ecdsa::SigningKey` via blanket impls
+(`AssociatedAlgorithmIdentifier` → `DynSignatureAlgorithmIdentifier`).
+No FFI, no second copy of the key, no PEM round-trip. The `builder`
+feature pulls in `sha1` (used elsewhere in X.509 but not by our
+ES384-signed cert) — that's a transitive cost but it's pure-Rust too.
+
+One small wrinkle: the builder's `Signature<NistP384>:
+AssociatedAlgorithmIdentifier` constraint requires
+`sha2::Sha384: AssociatedOid`, which is gated behind the `sha2/oid`
+feature. We enable that feature workspace-wide; it's feature-additive
+and has no observable effect on the non-test path.
+
+**Alternatives considered:**
+- `rcgen` with `ring` — see above.
+- `rcgen` with `aws_lc_rs` — same FFI argument.
+- Hand-rolled `der`-based TBS construction — too verbose for the
+  payoff.
+
+---
+
+## D50 — COSE_Sign1 ES384 signatures are raw 96-byte `r || s` (NOT DER)
+
+**What:** The on-wire signature inside a COSE_Sign1 envelope with
+`alg = ES384` is a fixed-size 96-byte concatenation of `r` and `s`
+(each 48 bytes, big-endian). The verifier calls
+`p384::ecdsa::Signature::from_slice(&[u8; 96])` which accepts that form
+directly. The encoder side (`build_test_envelope_es384`) emits the
+same shape via `Signature::to_bytes`.
+
+**Why:** RFC 8152 §8.1 ("ECDSA") says: *"The signature algorithm
+results in a pair of integers (R, S). These integers will be the same
+length as the length of the key used for the signature process. The
+signature is encoded by converting the integers into byte strings of
+the same length as the key size. The length is rounded up to the
+nearest byte and is left padded with zero bits to get to the correct
+length. The two integers are then concatenated together to form a byte
+string that is the resulting signature."*
+
+For ES384, the curve order is 384 bits = 48 bytes; the signature is
+2 × 48 = 96 bytes. **Not** DER-encoded — that's a separate
+representation (`p384::ecdsa::DerSignature`) used by X.509 / TLS but
+not by COSE.
+
+Our verifier first checks the length:
+```rust
+if sig_bytes.len() != 96 {
+    return Err(CoseVerifyError::MalformedSignature);
+}
+```
+then calls `Signature::from_slice(sig_bytes)`. A 95-byte or 97-byte
+signature surfaces `MalformedSignature`; a 96-byte signature that
+doesn't verify surfaces `SignatureMismatch`. The two are distinguishable
+to callers who want to log them separately.
+
+**Alternatives considered:**
+- Accept DER-encoded signatures too. Rejected — COSE wire format is
+  fixed-size; accepting DER would be a non-spec extension.
+- Use `Signature::from_der`. Rejected — we'd be silently masking
+  malformed envelopes.
 
 ---

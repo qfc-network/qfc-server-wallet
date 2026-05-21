@@ -525,11 +525,22 @@ pub fn verify_attestation(
 
 fn map_verify_err(e: &CoseVerifyError) -> AttestationVerifyError {
     match e {
-        CoseVerifyError::InvalidPublicKey | CoseVerifyError::InvalidSignature => {
-            AttestationVerifyError::InvalidSignature
+        // Cryptographic verify-time errors collapse to InvalidSignature
+        // from the caller's perspective. Inside the cose module the
+        // variants stay distinct so callers who want them can pattern-match
+        // on the typed surface; this mapping is the conservative collapse
+        // for `verify_attestation`.
+        CoseVerifyError::InvalidPublicKey
+        | CoseVerifyError::InvalidSignature
+        | CoseVerifyError::MalformedSignature
+        | CoseVerifyError::SignatureMismatch => AttestationVerifyError::InvalidSignature,
+        // Leaf-cert structural failure is structurally a malformed envelope
+        // — the cose layer failed to extract a public key.
+        CoseVerifyError::MalformedLeafCert => {
+            AttestationVerifyError::MalformedCose("leaf certificate is malformed")
         }
         CoseVerifyError::AlgorithmNotImplemented(_) => {
-            AttestationVerifyError::MalformedCose("signature algorithm not implemented (see D47)")
+            AttestationVerifyError::MalformedCose("signature algorithm not implemented")
         }
     }
 }
@@ -813,17 +824,76 @@ mod tests {
         assert!(matches!(err, Err(AttestationVerifyError::MalformedCose(_))));
     }
 
+    // ---------- ES384 (real ECDSA-P384) end-to-end --------------------------
+
+    /// Build a synthetic ES384-signed `NitroAttestationDoc` mirroring the
+    /// AWS Nitro production wire shape: a real COSE_Sign1 CBOR envelope,
+    /// `alg = ES384` in the protected header, and an X.509 DER leaf cert
+    /// in the inner payload's `certificate` field.
+    fn build_valid_cose_es384_doc(now_ms: i64) -> (NitroAttestationDoc, Vec<u8>) {
+        use crate::cose::{
+            build_test_envelope_es384, tests_helpers::es384_keypair_and_cert, AttestationPayload,
+        };
+        let (sk, cert_der) = es384_keypair_and_cert(0x42);
+        let mut pcrs = BTreeMap::new();
+        for i in 0u8..=4 {
+            pcrs.insert(i, vec![0xAB ^ i; PCR_LEN]);
+        }
+        let payload = AttestationPayload {
+            module_id: "i-cose-es384-test".into(),
+            timestamp: now_ms,
+            digest: "SHA384".into(),
+            pcrs,
+            certificate: cert_der,
+            cabundle: vec![vec![0xCA; 16]],
+            public_key: vec![1, 2, 3],
+            user_data: b"user-data-es384".to_vec(),
+            nonce: vec![0u8; 32],
+        };
+        let bytes = build_test_envelope_es384(&payload, &sk).expect("build es384 envelope");
+        let doc = NitroAttestationDoc::from_cose_sign1(&bytes).expect("from_cose_sign1");
+        let trust_anchor = b"AWS-Nitro-Root-Cert-Stub-M3".to_vec();
+        (doc, trust_anchor)
+    }
+
     #[test]
-    fn cose_es384_doc_routes_to_not_implemented_stub() {
-        // Hand-build a CoseSign1Es384 doc — we can't actually produce a
-        // valid ES384 signature today, but the dispatch surface should
-        // route through the stub and surface the deferred-algo error.
+    fn cose_es384_happy_path_verifies() {
         let now = 1_000_000;
-        let (mut doc, anchor) = build_valid_cose_doc(now);
-        doc.signature_kind = SignatureKind::CoseSign1Es384;
-        let err = verify_attestation(&doc, &PcrConstraint::any(), &anchor, now, 60_000);
-        // ES384 stub → MalformedCose("…not implemented…").
-        assert!(matches!(err, Err(AttestationVerifyError::MalformedCose(_))));
+        let (doc, anchor) = build_valid_cose_es384_doc(now);
+        assert_eq!(doc.signature_kind, SignatureKind::CoseSign1Es384);
+        let pcrs = PcrConstraint::pcr0_only({
+            let mut p0 = [0u8; PCR_LEN];
+            for b in &mut p0 {
+                *b = 0xAB;
+            }
+            p0
+        });
+        let verified = verify_attestation(&doc, &pcrs, &anchor, now, 60_000).expect("verifies");
+        assert_eq!(verified.payload.user_data, b"user-data-es384");
+    }
+
+    #[test]
+    fn cose_es384_rejects_stale_attestation() {
+        let now = 1_000_000;
+        let (doc, anchor) = build_valid_cose_es384_doc(now);
+        let err = verify_attestation(&doc, &PcrConstraint::any(), &anchor, now + 120_000, 60_000);
+        assert!(matches!(
+            err,
+            Err(AttestationVerifyError::StaleAttestation { .. })
+        ));
+    }
+
+    #[test]
+    fn cose_es384_rejects_pcr_mismatch() {
+        let now = 1_000_000;
+        let (doc, anchor) = build_valid_cose_es384_doc(now);
+        let bad_pcr = [0xEEu8; PCR_LEN];
+        let pcrs = PcrConstraint::pcr0_only(bad_pcr);
+        let err = verify_attestation(&doc, &pcrs, &anchor, now, 60_000);
+        assert!(matches!(
+            err,
+            Err(AttestationVerifyError::PcrMismatch { index: 0 })
+        ));
     }
 
     #[test]

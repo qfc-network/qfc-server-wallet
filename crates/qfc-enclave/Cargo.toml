@@ -59,6 +59,11 @@ alloy-rlp.workspace = true
 coset.workspace = true
 ciborium.workspace = true
 
+# ECDSA P-384 (ES384) verifier for real AWS Nitro attestations + X.509
+# leaf-cert SPKI parsing. See docs/m3-decisions.md D47 + D48.
+p384.workspace = true
+x509-cert.workspace = true
+
 [features]
 # Real Nitro Enclaves backend (requires Linux + AWS Nitro-enabled host).
 # Off by default so non-Linux dev still compiles. See enclaves/nitro.rs.
