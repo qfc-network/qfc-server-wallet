@@ -1,8 +1,8 @@
 # RFC: QFC Server Wallet (Privy-style TEE custody + M-of-N quorum)
 
-**Status:** v1.2 — accepted
+**Status:** v1.3 — accepted
 **Author:** Claude (drafted for Larry)
-**Date:** 2026-05-19 (v0.1) · 2026-05-19 (v1.0, decisions applied) · 2026-05-21 (v1.1, retro fold-back) · 2026-05-21 (v1.2, M3+M4 retro fold-back)
+**Date:** 2026-05-19 (v0.1) · 2026-05-19 (v1.0, decisions applied) · 2026-05-21 (v1.1, retro fold-back) · 2026-05-21 (v1.2, M3+M4 retro fold-back) · 2026-05-21 (v1.3, v1.3 batch retro fold-back)
 **License of this doc:** Apache 2.0 (will live in public repo `qfc-server-wallet`)
 
 **Changelog**
@@ -10,6 +10,7 @@
 - v1.0 (2026-05-19) — decisions resolved by Larry; §10 rewritten as "Resolved decisions"; §9.6 rewritten with honest QVM/WASM ABI assessment from qfc-core code inspection; M5 scope adjusted accordingly; §12 "Repo bootstrap checklist" added
 - v1.1 (2026-05-21) — applied retro fold-backs after M1+M2 shipped (228 tests on main); see docs/retro-m1-m2.md
 - v1.2 (2026-05-21) — applied retro fold-backs after M3 skeleton + M4 quorum shipped (312 tests on main); see docs/retro-m3-m4.md
+- v1.3 (2026-05-21) — applied retro fold-backs after the v1.3 batch shipped — PolicyServiceSigner end-to-end wiring, M5 (ML-DSA + QVM minimal), operator runbooks, COSE parse-half, gRPC API alongside HTTP, approver clients (Rust + TS) — six PRs, 420 tests across four test surfaces; see docs/retro-v1.3.md
 
 ---
 
@@ -812,13 +813,14 @@ Each milestone is independently shippable: it produces a tagged release on the p
 - `NitroEnclave` impl of `Enclave` trait (host-side; vsock IPC)
 - In-enclave binary (`enclave/boot.rs`) — minimal, no_std-friendly where possible, statically linked
 - Reproducible EIF build (Dockerfile.eif pinned; documented bit-exact reproduction steps; CI verifies PCR0 is stable across builds)
-- **Hybrid-scheme M3 GA blocker** (per §2.1): extend `EnclaveSignRequest` with `policy_decision: SignedPolicyDecision` and `approvals: Vec<SignedApproval>` (additive fields); populate `Wallet.{max_value_cap, contract_allowlist, chain_allowlist}` as hard ceilings; EIF binary includes the invariant checker + signed-policy verifier. Without this, M3 ships a TEE that doesn't enforce the hybrid scheme. **v1.2 update:** the M3 skeleton PR (#16) shipped the `HybridVerifier` and `SignedPolicyDecision` as unit-tested library code (18 tests), with `EnclaveSignRequest.policy_decision` landed as `Option<_>` per [m3-decisions D21](m3-decisions.md#d21) for additive callsite compatibility. The closing piece is `PolicyServiceSigner` end-to-end wiring through `WalletService::sign` — the orchestrator currently passes `None`; the integration PR is the next milestone's first deliverable. See [m3-decisions D29](m3-decisions.md#d29) and retro-m3-m4 [§3.2](retro-m3-m4.md).
-- Live audit anchor cron (deferred from M2; M2 P2 shipped only the type shape — actual cron job + on-chain commit lands here, needs `qfc-core` dep and a funded operator account). **v1.2 update:** the M3 skeleton PR shipped `LocalFileAnchor` (file-backed signed JSONL submitter) per [m3-decisions D28](m3-decisions.md#d28); the on-chain submitter remains blocked on `qfc-core` workspace integration per retro-m1-m2 [§3.6](retro-m1-m2.md).
-- `S3KmsShareStore` with attestation-conditional KMS decrypt policy
-- Attestation verification library (`qfc-enclave::verify_attestation`) — anyone can pull this in to verify a QFC server wallet attestation
-- Public attestation verification page (static HTML on `attestation.qfc.network`) — takes attestation doc, returns "matches PCR0 X (rebuild yourself with `make verify-eif`)"
-- Terraform module in `qfc-server-wallet-ops` for the EC2 + KMS + S3 + IAM setup
-- Operational runbooks: deploy, EIF upgrade, key rotation, incident response (redacted public version in `docs/`)
+- **Hybrid-scheme M3 GA blocker** (per §2.1): extend `EnclaveSignRequest` with `policy_decision: SignedPolicyDecision` and `approvals: Vec<SignedApproval>` (additive fields); populate `Wallet.{max_value_cap, contract_allowlist, chain_allowlist}` as hard ceilings; EIF binary includes the invariant checker + signed-policy verifier. Without this, M3 ships a TEE that doesn't enforce the hybrid scheme. **v1.2 update:** the M3 skeleton PR (#16) shipped the `HybridVerifier` and `SignedPolicyDecision` as unit-tested library code (18 tests), with `EnclaveSignRequest.policy_decision` landed as `Option<_>` per [m3-decisions D21](m3-decisions.md#d21) for additive callsite compatibility. The closing piece is `PolicyServiceSigner` end-to-end wiring through `WalletService::sign` — the orchestrator currently passes `None`; the integration PR is the next milestone's first deliverable. See [m3-decisions D29](m3-decisions.md#d29) and retro-m3-m4 [§3.2](retro-m3-m4.md). **v1.3 update — shipped.** PR #19 lands `PolicyServiceSigner` + `LocalPolicyServiceSigner` + `WalletService::with_policy_service_signer` + `MockEnclave` parity with the eventual Nitro EIF; new `AuditKind::PolicyDecisionSigned` (kind byte 17) per [m3-decisions D35](m3-decisions.md#d35); additive `EnclaveSignRequest.{wallet_ceilings, policy_signing_payload}` per [m3-decisions D37](m3-decisions.md#d37). 7 E2E tests in `policy_service_signer_e2e.rs` cover happy path + wrong-key + stale + value-cap + back-compat. The retro-m3-m4 §3.2 gap is closed end-to-end; the orchestrator → policy-service signer → enclave-side verifier path is ready to swap to `NitroEnclave` when the M3 GA PR lands. See retro-v1.3 [§2 / §3.1](retro-v1.3.md).
+- Live audit anchor cron (deferred from M2; M2 P2 shipped only the type shape — actual cron job + on-chain commit lands here, needs `qfc-core` dep and a funded operator account). **v1.2 update:** the M3 skeleton PR shipped `LocalFileAnchor` (file-backed signed JSONL submitter) per [m3-decisions D28](m3-decisions.md#d28); the on-chain submitter remains blocked on `qfc-core` workspace integration per retro-m1-m2 [§3.6](retro-m1-m2.md). **v1.3 status:** unchanged — `LocalFileAnchor` ships; on-chain submitter remains blocked on `qfc-core` integration (retro-v1.3 [§6.2](retro-v1.3.md)).
+- `S3KmsShareStore` with attestation-conditional KMS decrypt policy. **v1.3 status:** mock-backed (per [m3-decisions D23](m3-decisions.md#d23)); real `aws-sdk-s3` / `aws-sdk-kms` behind a future `feature = "aws"` remains deferred to live-AWS work (retro-v1.3 [§6.3](retro-v1.3.md)).
+- Attestation verification library (`qfc-enclave::verify_attestation`) — anyone can pull this in to verify a QFC server wallet attestation. **v1.3 update — parse half shipped.** PR #22 lands real COSE_Sign1 CBOR parsing via `coset` + `ciborium` (pure-Rust, no FFI, matches the no-OpenSSL-in-the-enclave-attack-surface rule per RFC §1.5). `parse_cose_sign1` / `extract_payload` / `verify_cose_signature` (ed25519) ship end-to-end; `SignatureKind::{Mock, CoseSign1Ed25519, CoseSign1Es384}` enum makes the verification path explicit. AWS-Nitro-tagged envelopes parse correctly today. **Still deferred to live-AWS / GA:** the ES384 signature verifier (`verify_cose_signature_es384` is a typed stub returning `AlgorithmNotImplemented` per [m3-decisions D47](m3-decisions.md#d47)) — production AWS Nitro attestations use ES384, but without a real AWS capture we'd only be signing+verifying our own synthetic vectors; the curve plug is a one-file diff against the `p384` crate when a real fixture exists. The AWS Nitro root cert chain validation (`verify_root_chain(leaf, cabundle, root)` is a typed stub per [m3-decisions D46](m3-decisions.md#d46)) blocked on bundling the AWS root cert + reviewing the chain walker against real envelopes. See retro-v1.3 [§3.2](retro-v1.3.md).
+- Public attestation verification page (static HTML on `attestation.qfc.network`) — takes attestation doc, returns "matches PCR0 X (rebuild yourself with `make verify-eif`)". **v1.3 status:** still deferred to GA (no real PCR0 hashes yet to publish).
+- Bit-exact EIF rebuild + `eif-reproducibility.yml` workflow — see RFC §8.5 + §12.4. **v1.3 status:** Dockerfile.eif placeholder ships per [m3-decisions D27](m3-decisions.md#d27); bit-exact CI rebuild remains deferred to GA (retro-v1.3 [§6.3](retro-v1.3.md)).
+- Terraform module in `qfc-server-wallet-ops` for the EC2 + KMS + S3 + IAM setup. **v1.3 status:** still deferred to GA (`qfc-server-wallet-ops` work; lives outside Claude's runway).
+- Operational runbooks: deploy, EIF upgrade, key rotation, incident response (redacted public version in `docs/`). **v1.3 update — shipped.** PR #21 lands six public redacted runbooks under `docs/runbooks/` (`00-deploy.md`, `01-eif-upgrade.md`, `02-key-rotation.md`, `03-incident-response.md`, `04-disaster-recovery.md`, `05-operator-onboarding.md`). M3-GA-gated and `qfc-core`-gated sections are marked "Pending" rather than written as if live. Private counterparts live in `qfc-server-wallet-ops`. See retro-v1.3 [§2](retro-v1.3.md).
 
 **User-side dependencies (outside Claude's control):**
 - AWS account with Nitro-enabled regions
@@ -838,8 +840,10 @@ Each milestone is independently shippable: it produces a tagged release on the p
 - Approval submission API: `POST /approvals/{request_id}` with signed approval payload
 - Quorum collection logic (concurrent listening, threshold detection, timeout handling)
 - Enclave-side approval verification (the enclave fetches approver public keys via attested config and verifies M signatures)
-- Approver-side reference client (Rust + TS) for signing approvals
-- Bug bounty program launch (Immunefi)
+- Approver-side reference client (Rust + TS) for signing approvals. **v1.3 update — shipped.** PR #24 lands `clients/approver-rs/` (Rust 1.88+ daemon + library, 15 tests) and `clients/approver-ts/` (Node 20 + TypeScript with `@noble/curves`, 17 vitest tests) per [clients-decisions D46–D54](clients-decisions.md). Standalone-workspace pattern — both directories sit **outside** the main Cargo workspace (root `Cargo.toml` `workspace.exclude`) so production integrators can fork without inheriting the wallet's dep tree per [clients-decisions D46](clients-decisions.md#d46). Cross-language preimage compat pinned byte-exact via the Rust-generated `tools/gen-golden-vectors/` fixture per [clients-decisions D52](clients-decisions.md#d52). Default decision policy is fail-closed Refuse per [clients-decisions D49](clients-decisions.md#d49); `--webhook-secret @path` indirection per [D50](clients-decisions.md#d50). See retro-v1.3 [§2 / §3.3 / §4.3 / §4.4](retro-v1.3.md).
+- Bug bounty program launch (Immunefi). **v1.3 status:** still deferred to GA + audit sign-off per retro-m3-m4 §2 M4 row.
+
+**v1.3 update — also shipped under M4 / RFC decision #7:** gRPC API surface alongside HTTP — see §10 decision #7 status row + `docs/grpc-api.md` + `docs/grpc-decisions.md` (D46–D52). PR #23 lands `tonic 0.12` + `prost 0.13` + `tonic-reflection 0.12` server, three protos under `crates/qfc-server-wallet/proto/`, both servers spawned from a single `Arc<AppState>` sharing a graceful-shutdown future per [grpc-decisions D51](grpc-decisions.md#d51), zero logic duplication (both adapt to the same `Arc<WalletService>` handler core). 10 new tests (7 integration + 3 unit). **Still deferred:** streaming RPCs (M2 surface is unary; audit-event tailing is a separate proposal); published gRPC client SDK per [grpc-decisions D47](grpc-decisions.md#d47); direct TLS (operators terminate at envoy / nginx).
 
 **Estimate:** ~5–7 Claude sessions.
 
@@ -848,11 +852,11 @@ Each milestone is independently shippable: it produces a tagged release on the p
 **Goal:** post-quantum readiness shippable on its own clock; partial QVM coverage matching what `qfc-core` actually supports today.
 
 **Ships:**
-- `MlDsa44/65/87Signer` implementing PQ signing (FIPS 204 / Dilithium)
-- Wallet migration tool: re-shard existing ed25519/secp256k1 wallet under ML-DSA scheme (with operator approval flow, since the new wallet has a different address)
-- **QVM minimal decoder** (option (b) of §9.6): parses the stable borsh-encoded tx envelope (`tx_type`, `to`, `value`, `gas_limit`); treats `data` as opaque; supports policy on chain_id + target allowlist + value caps + gas caps. Method-level / argument-level QVM policy is **deferred to M6** pending a first-class `QvmCall` tx variant in `qfc-core`.
-- Multi-curve quorum (approvers can be on different curves than wallet)
-- Cross-TEE quorum design doc (implementation may be M6) — wallet config can require M-of-N attestations across {Nitro, SGX, TDX}
+- `MlDsa44/65/87Signer` implementing PQ signing (FIPS 204 / Dilithium). **v1.3 update — shipped.** PR #20 lands all three signers backed by the pure-Rust `ml-dsa` v0.1 crate (RustCrypto signatures workspace; zero C FFI per RFC §1.5 and [m5-decisions D38](m5-decisions.md#d38)). 32-byte FIPS 204 seed `xi` as `SecretBytes` per [m5-decisions D39](m5-decisions.md#d39); `HashAlg::None` is the only accepted hash alg per [m5-decisions D40](m5-decisions.md#d40); `signer_for_scheme` / `dispatch_signer` keep their `Result` return shape per [m5-decisions D45](m5-decisions.md#d45) for future PQ schemes. `MockEnclave::generate_wallet` PQ branch allocates a 32-byte seed (not 64) per [m5-decisions D44](m5-decisions.md#d44). `#![forbid(unsafe_code)]` preserved everywhere.
+- Wallet migration tool: re-shard existing ed25519/secp256k1 wallet under ML-DSA scheme (with operator approval flow, since the new wallet has a different address). **v1.3 status:** still deferred — explicitly scoped to a separate post-M5 `tools/wallet-migrate` deliverable per [m5-decisions D42](m5-decisions.md#d42); migration is a customer-facing flow (multi-step ceremony: drain old wallet, fund new, retire old shares), not a crypto primitive. Mixing it into the M5 PR would conflate PQ-signing readiness with operational ceremony.
+- **QVM minimal decoder** (option (b) of §9.6): parses the stable borsh-encoded tx envelope (`tx_type`, `to`, `value`, `gas_limit`); treats `data` as opaque; supports policy on chain_id + target allowlist + value caps + gas caps. Method-level / argument-level QVM policy is **deferred to M6** pending a first-class `QvmCall` tx variant in `qfc-core`. **v1.3 update — shipped.** PR #20 lands `qfc_policy::decoders::qvm` with a local `QvmTxEnvelope` mirror per [m5-decisions D41](m5-decisions.md#d41) (no `qfc-core` workspace dep per retro-m1-m2 [§3.6](retro-m1-m2.md)). Forward-compatible — unknown tx-type discriminants surface as `QvmTxType::Other(d)`; trailing bytes tolerated.
+- Multi-curve quorum (approvers can be on different curves than wallet). **v1.3 update — shipped, no new code.** `m5_multi_curve_quorum.rs` integration test pins the property (ML-DSA-65 wallet authorised by two ed25519 approvers, full sign flow, FIPS 204 signature externally verifies). The architecture already supported it — M4 [D16] per-identity scheme dispatch routed each approver's signature through their own registered scheme. The M5 work was *pinning* the architecture, not extending it. See retro-v1.3 [§4.5](retro-v1.3.md).
+- Cross-TEE quorum design doc (implementation may be M6) — wallet config can require M-of-N attestations across {Nitro, SGX, TDX}. **v1.3 update — shipped.** PR #20 lands `docs/design/cross-tee-quorum.md` per [m5-decisions D43](m5-decisions.md#d43): threat model (RFC §5.2 row 1 — single-vendor TEE compromise), `Vec<TeeBackendConstraint>` wallet-config shape, M-of-N attestation composition rule, KMS implications, M-of-2 sequence diagram. Implementation deferred to M6 pending SGX + TDX backend acquisition + external review of the verifier composition rule.
 
 **Explicitly deferred from M5 (was in v0.1, deferred in v1.0):**
 - Full QVM method/argument decoder — requires `qfc-core` to land a stable QVM tx ABI first
@@ -906,6 +910,8 @@ Rule: if leaked content would directly enable attacks on running production, it 
 
 **Clarification (v1.1).** M1+M2 shipped without an independent human security pass — Claude was the sole author and no qfc-core team rotation happened. This is acceptable while there is **no production deployment**: the pre-M2 internal review is non-blocking when the milestone has no production posture. The **pre-M3 external audit becomes the first mandatory human security review** and must not be skipped, since M3 is when real TEE custody begins serving real signing requests. See retro [§3.8](retro-m1-m2.md).
 
+**Approver-client status (v1.3).** The M4 line item "approver-side reference client (Rust + TS)" — flagged in the retro-m3-m4 §2 M4 table as "deferred until there's a real external approver to point at it" — shipped under PR #24. The condition was met by the standalone-workspace + golden-vector pattern (RFC §8.5): the reference clients are forkable starting points for real external approvers, not toys. See retro-v1.3 [§2 / §3.3](retro-v1.3.md). The Immunefi bug bounty launch line in the table above remains deferred to GA + audit sign-off.
+
 ### 8.5 Reproducible builds
 
 - `make verify-eif` in public repo rebuilds the enclave image bit-exactly
@@ -913,6 +919,20 @@ Rule: if leaked content would directly enable attacks on running production, it 
 - Attestation verification page lets anyone check "this signature came from EIF tag X" → "EIF tag X has PCR0 Y" → "you can `git checkout X && make verify-eif` and confirm PCR0 = Y locally"
 
 This is the closure that makes "open source TEE" mean something. Without reproducible builds, public source doesn't give the user any guarantee about what's running.
+
+#### Standalone-workspace pattern for forkable reference clients (v1.3)
+
+For any reference client an integrator is expected to **fork** as a starting point (rather than depend on as a published crate), the M4 approver-client PR (#24) establishes the pattern: the client directory declares its own `[workspace]` table, has its own `Cargo.lock`, and is listed in the root `Cargo.toml`'s `workspace.exclude`. The current working precedents:
+
+- `clients/approver-rs/` — Rust 1.88+ approver daemon (own Cargo workspace, own `Cargo.lock`)
+- `clients/approver-ts/` — Node 20+ TypeScript approver (npm project; never touched the Cargo side)
+- `tools/gen-golden-vectors/` — Rust helper that emits the cross-language preimage fixture (own Cargo workspace)
+
+Why: pulling the full `qfc-server-wallet` dep graph (`sqlx-macros-core` with its MySQL build chain, `utoipa-swagger-ui` with its build-time `syn 1`, `opentelemetry-otlp` pinning `tonic 0.12`, ...) into every approver fork would make the fork harder to maintain than rewriting from scratch — defeating the "reference" framing. The standalone-workspace pattern means a fork is genuinely minimal. Trade-off: workspace-wide `cargo test` doesn't cover the clients, so each gets its own CI gate (`cd clients/approver-rs && cargo test`; TS client is opt-in per [clients-decisions D54](clients-decisions.md#d54)).
+
+**Cross-language byte-exact compat via golden vectors.** When the same wire format is re-implemented in a second language (today: TypeScript for the approver-side preimage layout), a generated Rust fixture pins the bytes. `tools/gen-golden-vectors/` calls `qfc_quorum::SignedApproval::signing_preimage` on three deterministic inputs and writes `clients/approver-ts/test/fixtures/preimage_golden.json`. The TS test reads the fixture and asserts byte equality; the Rust client carries the same pin via an inline hex literal in `tests/preimage_compat.rs::deterministic_preimage_snapshot`. Both literals must update together if the layout shifts. See [clients-decisions D52](clients-decisions.md#d52) and retro-v1.3 [§4.3](retro-v1.3.md).
+
+**Recommended for future reference clients:** gRPC client SDK (Rust + TS, mirroring the approver-client structure); web SDK; wallet-migration tool (`tools/wallet-migrate` per [m5-decisions D42](m5-decisions.md#d42)); any future multi-VM reference signer. The pattern is: standalone workspace + (where relevant) golden-vector fixture generated from the canonical Rust side.
 
 ### 8.6 Contributor process
 
@@ -1026,7 +1046,7 @@ All open decisions from v0.1 §10 are resolved below. Each entry: decision, wher
 | 4 | Wallet ID format | **ULID** for `wallet_id`; **`qfc_address: Option<Address>`** as a separate field, derived from `master_public_key` when the scheme is chain-compatible. PQ wallets have `qfc_address = None` until the chain accepts ML-DSA-derived addresses. | §3.1 | Two IDs serve two purposes — stable logical ID survives PQ migration; chain address is for queryability. |
 | 5 | QVM and WASM tx ABI stability | **Option (b) of §9.6** — M5 ships a QVM **minimal decoder** (envelope-level: chain_id, to, value, gas_limit; opaque `data`). **WASM decoder deferred** entirely until `qfc-core` implements WASM execution. Full QVM method-level decoder deferred to M6 pending a `QvmCall` tx variant in `qfc-core`. | §7 (M5), §9.6 | Source-of-truth read: `qfc-core` has a QVM but no QVM tx variant; WASM execution doesn't exist. Honesty over slide-deck completeness. |
 | 6 | Default audit backend | **Postgres default**, **Kafka optional**, picked at config time. `FileAuditSink` remains for dev/local. | §2.6 | Postgres covers >90% of deployments cleanly with hash-chained ordering; Kafka is opt-in for high-throughput multi-tenant. |
-| 7 | HTTP vs gRPC for top-level API | **HTTP/REST in M2**, **gRPC in M4** (added alongside, not replacing — both share the same handler core). | §7 (M2, M4) | REST is faster to integrate and easier for ops; gRPC follows once customer demand materializes. |
+| 7 | HTTP vs gRPC for top-level API | **HTTP/REST in M2**, **gRPC in M4** (added alongside, not replacing — both share the same handler core). **v1.3 — shipped.** PR #23 lands the gRPC surface via `tonic 0.12` + `prost 0.13` + `tonic-reflection 0.12`; both servers spawned from a single `Arc<AppState>` sharing a graceful-shutdown future ([grpc-decisions D51](grpc-decisions.md#d51)); zero logic duplication (both adapt to the same `Arc<WalletService>` core). Default ports: HTTP `127.0.0.1:8088` (env `QFC_SERVER_WALLET_HTTP_BIND`; back-compat env `QFC_SERVER_WALLET_BIND`); gRPC `127.0.0.1:9090` (env `QFC_SERVER_WALLET_GRPC_BIND`). The HTTP default moved from `8080` (M2) to `8088` to free `:9090` for gRPC. Reference: `docs/grpc-api.md`. Still deferred: streaming RPCs; published gRPC client SDK ([grpc-decisions D47](grpc-decisions.md#d47)); direct TLS. | §7 (M2, M4) | REST is faster to integrate and easier for ops; gRPC follows once customer demand materializes. |
 | 8 | KMS choice in production | **AWS KMS for M3 baseline**; **Vault Transit as second backend** for cross-cloud customers, planned for M3+ or M4. Trait stays `KmsBackend`. | §2.2, §7 | AWS KMS gives us attestation-conditional decrypt natively for Nitro; Vault unlocks GCP/on-prem deployments without rewriting the share path. |
 | 9 | Approver notification channels at M4 launch | **Webhook (mandatory)** + **email (optional)** + **QFC on-chain event (for `Chain` approver identities)**. Telegram/Slack/PagerDuty added post-M4 as plug-in channels. | §7 (M4) | Webhook is the universal integration; on-chain events compose with on-chain governance; email is the "nothing else works" fallback. |
 | 10 | Rate-limit primitives | **Token bucket per (wallet, requester) tuple.** Sliding window not adopted. | §2.4 (policy DSL) | Token bucket is predictable, cheap to reason about, easy to expose in policy DSL; sliding-window subtleties don't earn their complexity here. |
@@ -1142,16 +1162,22 @@ Each `src/lib.rs` ships with:
 
 ### 12.4 CI workflows (`.github/workflows/`)
 
-| File | Triggers | Steps |
-|------|----------|-------|
-| `ci.yml` | PR + push to main | `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace --all-features`, `cargo doc --no-deps` |
-| `deny.yml` | PR + nightly cron | `cargo deny --workspace check` (advisories + bans + licenses + sources) |
-| `audit.yml` | PR + nightly cron | `cargo audit --deny warnings --ignore <RUSTSEC-IDs>` — ignore list **must stay in sync** with `deny.toml [advisories].ignore` (v1.2). See note below |
-| `vet.yml` | PR | `cargo vet --locked` |
-| `sbom.yml` | release tag | `cargo cyclonedx -f json` for each binary, attached to release |
-| `eif-reproducibility.yml` | added in M3 | Two parallel builds, diff PCR0; fail if non-bit-exact |
+| File | Triggers | Prereq steps | Steps |
+|------|----------|-------------|-------|
+| `ci.yml` | PR + push to main | `arduino/setup-protoc@v3` (v1.3 — see note below) | `cargo fmt --check`, `cargo clippy --workspace --all-targets --all-features -- -D warnings`, `cargo test --workspace --all-features`, `cargo doc --workspace --no-deps --all-features` with `RUSTDOCFLAGS="-D warnings"` |
+| `deny.yml` | PR + nightly cron | — | `cargo deny --workspace check` (advisories + bans + licenses + sources) |
+| `audit.yml` | PR + nightly cron | — | `cargo audit --deny warnings --ignore <RUSTSEC-IDs>` — ignore list **must stay in sync** with `deny.toml [advisories].ignore` (v1.2). See note below |
+| `vet.yml` | PR | — | `cargo vet --locked` |
+| `sbom.yml` | release tag | — | `cargo cyclonedx -f json` for each binary, attached to release |
+| `eif-reproducibility.yml` | added in M3 GA | — | Two parallel builds, diff PCR0; fail if non-bit-exact |
 
 All workflows run on `ubuntu-latest`. macOS/Windows added when there's user demand. (The `msrv.yml` and `coverage.yml` rows from earlier drafts have been struck — those workflows are not currently in `.github/workflows/`; revisit at M3 GA when MSRV policy and coverage tooling are owned.)
+
+**v1.3 — `protoc` prerequisite.** PR #23 introduced the gRPC build, which invokes `tonic-build` at compile time; `tonic-build` shells out to the `protoc` binary, which `ubuntu-latest` does **not** pre-install. The `ci.yml` `test`, `clippy`, and `doc` jobs each include an `arduino/setup-protoc@v3` step before any `cargo` invocation. **Process rule:** any new code-gen build step → check the runner has the tool before reporting CI-green. Adding the tool to the CI-parity checklist in §8.6. See retro-v1.3 [§4.1](retro-v1.3.md).
+
+**v1.3 — `--all-features` cautionary footnote.** `ci.yml` runs `--all-features` to exercise the `nitro` feature's Linux-only `tokio-vsock` dep tree. On macOS dev hosts, `vsock 0.4.0` (the transitive crate via `tokio-vsock`) does **not** compile — it uses Linux-only `libc::accept4` / `SOCK_CLOEXEC` / `VMADDR_CID_LOCAL` / `MsgFlags::MSG_NOSIGNAL`. So `cargo check --all-features` will fail on a Mac. Local subagent checks must either run on a Linux dev box / VM, or run with the default feature set and rely on CI for the `nitro`-on path. See retro-m3-m4 [§4.1](retro-m3-m4.md).
+
+**v1.3 — four-gate parity + audit/deny/vet trio.** The §8.6 CI parity checklist for subagents (test / clippy / fmt / doc + audit / deny / vet) is now the workflow contract: a subagent must pass all seven gates locally before reporting green. The four CI gates (`ci.yml`'s `test`, `clippy`, `fmt`, `doc`) are listed explicitly above. The three supply-chain gates live in `deny.yml`, `audit.yml`, `vet.yml`. Branch protection on `main` requires all four CI files (`ci.yml`, `deny.yml`, `audit.yml`, `vet.yml`) to pass — see below.
 
 **v1.2 — `audit.yml` ignore list sync.** `cargo audit` and `cargo deny` consult separate config surfaces. Any advisory ignore added to `deny.toml [advisories].ignore` must also be added to the `audit.yml --ignore` invocation (and vice versa). The current ignores (as of v1.2):
 
@@ -1249,3 +1275,31 @@ The repo is ready to create when:
 6. Larry has signed off on the CODEOWNERS list
 
 Only then run `gh repo create qfc-network/qfc-server-wallet --public --source . --remote origin --description "QFC server wallet — TEE custody + SSS + M-of-N quorum"` and `git push -u origin main`.
+
+---
+
+## 13. Decision-doc D-numbering convention (v1.3)
+
+The project's non-obvious technical decisions live in per-milestone / per-feature-area markdown files. The numbering convention is **per-file**, not global. Each file owns its own `Dnn` sequence; the same `Dnn` number can (and does) appear in multiple files. Cross-references are filename-anchored — `[D21](m4-decisions.md#d21)` is distinct from `[D21](m3-decisions.md#d21)`.
+
+### Current files and ranges
+
+| File | D-range | Scope |
+|---|---|---|
+| `m1-decisions.md` | D1 – D20 | M1 (foundation) — workspace, crates, traits, mock backends, signers, SSS, audit chain |
+| `m3-decisions.md` | D21 – D32 (skeleton) · D33 – D37 (`PolicyServiceSigner`) · D46 – D47 (COSE follow-up) | M3 Nitro skeleton, hybrid verifier, attestation parsing. Note the non-contiguous range — D33–D37 landed with PR #19 (post-skeleton); D46–D47 landed with PR #22 (COSE parse-half) |
+| `m4-decisions.md` | D21 – D37 | M4 quorum — approver registry, approval store, orchestrator, webhook + on-chain stub. **Numerically overlaps `m3-decisions.md` D21–D32.** Anchored by filename only |
+| `m5-decisions.md` | D38 – D45 | M5 PQ signing + QVM minimal decoder + multi-curve quorum + cross-TEE design doc |
+| `grpc-decisions.md` | D46 – D52 | gRPC API surface (PR #23) — proto types, client SDK deferral, reflection gating, dual-server topology. **Numerically overlaps `m3-decisions.md` D46–D47 and `clients-decisions.md` D46+.** Anchored by filename only |
+| `clients-decisions.md` | D46 – D54 | Approver-side reference clients (PR #24) — forkability, dependency choices, identity override, cross-language preimage compat. **Numerically overlaps `m3-decisions.md` D46–D47 and `grpc-decisions.md` D46–D52.** Anchored by filename only |
+
+### Rules
+
+1. **Per-file numbering.** Each decision-doc file maintains its own `Dnn` sequence. The next decision added to `m5-decisions.md` is `D46` (continuing from D45); the next added to `m4-decisions.md` is `D38` (continuing from D37). New milestone / feature-area files start at whichever number is most informative (the first M5 decision was `D38` because it followed the M4 range; the first grpc decision was `D46` because it followed M5's range at the time of writing, even though `m3-decisions.md` later also acquired D46–D47).
+2. **Cross-references must be filename-anchored.** Always `[D21](m4-decisions.md#d21)`, never bare `[D21]`. Anchors are stable (`#d21` works in every markdown renderer the project uses).
+3. **No global renumbering.** Renumbering to a single global sequence would churn every existing cross-reference in the codebase, the CHANGELOG, prior retros, and external links (e.g. PR descriptions) for no real benefit — per-file numbering matches the actual workflow (each milestone / feature ships with its own decision doc).
+4. **New feature-area decision docs are encouraged.** When a feature stops being part of an in-flight milestone (e.g. `grpc-decisions.md`, `clients-decisions.md`), it gets its own file rather than crowding into a milestone doc. Pick a starting `Dnn` that's clearly distinct from any active milestone's range, or just continue the project-wide max — both are acceptable.
+
+### Why this convention
+
+Decision docs are written by subagents in parallel worktrees. Forcing a global sequence would require subagents to coordinate ahead of time on numeric ranges (or to renumber at merge time, producing CHANGELOG churn). Per-file numbering means each subagent picks its own next-available number with zero coordination cost, and the rebase is textually clean. See retro-v1.3 [§3.4](retro-v1.3.md) for the rationale write-up.
