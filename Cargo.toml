@@ -14,7 +14,14 @@ members = [
 # builds in the Nitro EIF container, not the host workspace. Excluding it
 # keeps the workspace-level `cargo test` fast and keeps the enclave's
 # Cargo.lock independent from the host's.
-exclude = ["enclave"]
+#
+# The `clients/approver-rs/` directory is the reference approver-side
+# Rust client (M4 deliverable). It's intentionally excluded so production
+# integrators can fork it as a starting point without having to inherit
+# the entire wallet workspace. The `tools/gen-golden-vectors/` binary is
+# excluded for the same reason — it generates cross-language test
+# fixtures and is not part of the server build.
+exclude = ["enclave", "clients/approver-rs", "tools/gen-golden-vectors"]
 
 [workspace.package]
 version = "0.0.0"

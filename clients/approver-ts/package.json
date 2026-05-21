@@ -1,0 +1,34 @@
+{
+  "name": "qfc-approver",
+  "version": "0.1.0",
+  "description": "Reference approver-side client for the QFC server wallet (Node 20 + TypeScript).",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "qfc-approver": "dist/index.js"
+  },
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "test": "vitest run",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@noble/curves": "^1.6.0",
+    "@noble/hashes": "^1.5.0",
+    "commander": "^12.1.0",
+    "express": "^4.21.0",
+    "pino": "^9.5.0",
+    "undici": "^6.20.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.7.4",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  }
+}
