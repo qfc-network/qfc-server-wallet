@@ -1,0 +1,183 @@
+// Shared types across the QFC server-wallet gRPC surfaces.
+//
+// Conventions (matching the HTTP/JSON surface — see docs/grpc-api.md):
+//   * ULIDs are encoded as strings (wallet_id, approver_id, etc).
+//   * Public keys, signatures, and 32-byte hashes are encoded as `bytes`.
+//   * Timestamps are `int64` unix-milliseconds.
+//   * Enums carry explicit numeric values; the zero variant is `UNSPECIFIED`
+//     so a missing/default value never silently maps to a real choice.
+
+syntax = "proto3";
+
+package qfc.wallet.v1;
+
+// Curves used for wallet master keys, approver keys, and policy-service
+// signatures. Mirrors `qfc_wallet_types::SigningScheme` 1:1.
+enum SigningScheme {
+  SIGNING_SCHEME_UNSPECIFIED = 0;
+  SIGNING_SCHEME_ED25519 = 1;
+  SIGNING_SCHEME_SECP256K1 = 2;
+  SIGNING_SCHEME_SECP256K1_RECOVERABLE = 3;
+  SIGNING_SCHEME_ML_DSA_44 = 4;
+  SIGNING_SCHEME_ML_DSA_65 = 5;
+  SIGNING_SCHEME_ML_DSA_87 = 6;
+}
+
+// Pre-sign hash transformation. Mirrors `qfc_wallet_types::HashAlg`.
+enum HashAlg {
+  HASH_ALG_UNSPECIFIED = 0;
+  HASH_ALG_NONE = 1;
+  HASH_ALG_SHA256 = 2;
+  HASH_ALG_KECCAK256 = 3;
+  HASH_ALG_BLAKE3 = 4;
+}
+
+// VM family for `VmTransaction` payloads.
+enum VmType {
+  VM_TYPE_UNSPECIFIED = 0;
+  VM_TYPE_EVM = 1;
+  VM_TYPE_QVM = 2;
+  VM_TYPE_WASM = 3;
+}
+
+// Wallet lifecycle status.
+enum WalletStatus {
+  WALLET_STATUS_UNSPECIFIED = 0;
+  WALLET_STATUS_ACTIVE = 1;
+  WALLET_STATUS_FROZEN = 2;
+  WALLET_STATUS_REVOKED = 3;
+}
+
+// Lifecycle status of an approver record.
+enum ApproverStatus {
+  APPROVER_STATUS_UNSPECIFIED = 0;
+  APPROVER_STATUS_ACTIVE = 1;
+  APPROVER_STATUS_REVOKED = 2;
+}
+
+// Approve / reject decision carried by a `SignedApproval`.
+enum ApprovalDecision {
+  APPROVAL_DECISION_UNSPECIFIED = 0;
+  APPROVAL_DECISION_APPROVE = 1;
+  APPROVAL_DECISION_REJECT = 2;
+}
+
+// Stable kebab-case classification of an audit event. Mirrors
+// `qfc_audit::AuditKind` (additive over time — keep numeric values stable).
+enum AuditKind {
+  AUDIT_KIND_UNSPECIFIED = 0;
+  AUDIT_KIND_WALLET_CREATED = 1;
+  AUDIT_KIND_WALLET_REVOKED = 2;
+  AUDIT_KIND_SIGNING_REQUESTED = 3;
+  AUDIT_KIND_SIGNING_EVALUATED = 4;
+  AUDIT_KIND_QUORUM_NOTIFIED = 5;
+  AUDIT_KIND_QUORUM_APPROVAL_RECEIVED = 6;
+  AUDIT_KIND_QUORUM_APPROVAL_REJECTED = 7;
+  AUDIT_KIND_QUORUM_TIMED_OUT = 8;
+  AUDIT_KIND_QUORUM_THRESHOLD_REACHED = 9;
+  AUDIT_KIND_SIGNING_ATTEMPTED = 10;
+  AUDIT_KIND_SIGNING_SUCCEEDED = 11;
+  AUDIT_KIND_SIGNING_FAILED = 12;
+  AUDIT_KIND_POLICY_CHANGED = 13;
+  AUDIT_KIND_APPROVER_SET_CHANGED = 14;
+  AUDIT_KIND_SYSTEM_ERROR = 15;
+  AUDIT_KIND_ENCLAVE_ATTESTED = 16;
+  AUDIT_KIND_POLICY_DECISION_SIGNED = 17;
+}
+
+// Approver identity payload. The four variants mirror the HTTP DTO 1:1.
+// `public_key` / `address` are always raw bytes (no hex).
+message ApproverIdentity {
+  // On-chain QFC account. `address` is 20 bytes for QFC chains.
+  message Chain {
+    uint64 chain_id = 1;
+    bytes address = 2;
+    bytes public_key = 3;
+    SigningScheme scheme = 4;
+  }
+  // Externally-registered raw public key (audit anchor in `id`).
+  message External {
+    string id = 1;
+    bytes public_key = 2;
+    SigningScheme scheme = 3;
+  }
+  // Hardware-token-backed identity. `handle` is opaque (e.g. "yubikey:slot9c").
+  message Hardware {
+    string handle = 1;
+    bytes public_key = 2;
+    SigningScheme scheme = 3;
+  }
+  // Nested server wallet (treasury-of-treasuries composition).
+  message NestedWallet {
+    string wallet_id = 1;
+    bytes public_key = 2;
+    SigningScheme scheme = 3;
+  }
+  oneof identity {
+    Chain chain = 1;
+    External external = 2;
+    Hardware hardware = 3;
+    NestedWallet nested_wallet = 4;
+  }
+}
+
+// Caller identity for `Sign`. Mirrors `qfc_policy::Requester`.
+message Requester {
+  message ApiKey {
+    string key_id = 1;
+  }
+  message OAuthSubject {
+    string sub = 1;
+  }
+  message NestedWallet {
+    string wallet_id = 1;
+  }
+  message OnChainContract {
+    uint64 chain_id = 1;
+    bytes address = 2;
+  }
+  oneof requester {
+    ApiKey api_key = 1;
+    OAuthSubject oauth_subject = 2;
+    NestedWallet nested_wallet = 3;
+    OnChainContract on_chain_contract = 4;
+  }
+}
+
+// Optional signing context. `extra` carries arbitrary JSON encoded as a
+// UTF-8 string (gRPC stays out of the structured-JSON business; the value
+// passes through unchanged to the audit + attestation chain).
+message SigningContext {
+  optional uint64 chain_id = 1;
+  optional string vm_type = 2;
+  // JSON-encoded `extra` blob. Empty string = JSON `null`.
+  string extra_json = 3;
+}
+
+// What is being signed. One variant per HTTP `SigningPayloadDto` kind.
+message SigningPayload {
+  message Raw {
+    bytes bytes = 1;
+  }
+  message PersonalSign {
+    bytes bytes = 1;
+  }
+  message TypedData {
+    // EIP-712 typed data JSON, UTF-8 encoded.
+    string json = 1;
+  }
+  message VmTransaction {
+    VmType vm = 1;
+    uint64 chain_id = 2;
+    // Optional decoded destination (20 bytes for EVM).
+    optional bytes to = 3;
+    // The full raw transaction bytes.
+    bytes raw = 4;
+  }
+  oneof payload {
+    Raw raw = 1;
+    PersonalSign personal_sign = 2;
+    TypedData typed_data = 3;
+    VmTransaction vm_transaction = 4;
+  }
+}

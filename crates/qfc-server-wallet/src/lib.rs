@@ -16,6 +16,7 @@
 #![allow(clippy::module_name_repetitions)]
 
 pub mod api;
+pub mod grpc;
 pub mod observability;
 pub mod service;
 pub mod wallet;
