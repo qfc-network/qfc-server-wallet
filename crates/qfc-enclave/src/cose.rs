@@ -40,18 +40,25 @@
 //! - `verify_cose_signature` runs the COSE_Sign1 to-be-signed computation
 //!   (`tbs_data`) and verifies it against a supplied **ed25519** public key.
 //!
-//! ## What is deferred ([D47](../../../docs/m3-decisions.md#d47))
+//! ## ECDSA-P384 (ES384) — [D47](../../../docs/m3-decisions.md#d47) closed
 //!
-//! - **ECDSA-P384 (ES384) signature verification.** Real AWS Nitro
-//!   attestations use ES384 over a P-384 leaf cert. The mock path used by
-//!   our tests is ed25519-keyed, so the ed25519 verifier is what we ship
-//!   today. `verify_cose_signature_es384` is a stub returning
-//!   `CoseVerifyError::AlgorithmNotImplemented`. The wire format,
-//!   `tbs_data` construction, and envelope round-trip are identical — only
-//!   the curve plug changes.
-//! - **AWS Nitro root cert chain validation.** See
-//!   [D46](../../../docs/m3-decisions.md#d46); `verify_root_chain` in
-//!   `verify_attestation` returns `Ok(())` today with a `TODO`.
+//! `verify_cose_signature_es384` runs real verification of ECDSA-P384
+//! signatures (AWS Nitro production format) using the pure-Rust `p384` +
+//! `x509-cert` crates from the RustCrypto family. The leaf cert is parsed
+//! as X.509 DER, the P-384 public key is extracted from the
+//! `SubjectPublicKeyInfo`, and the COSE_Sign1 to-be-signed (`tbs_data`)
+//! is verified against the on-wire signature (raw 96-byte `r || s` per
+//! COSE_Sign1 fixed-size signature format, NOT DER —
+//! [D50](../../../docs/m3-decisions.md#d50)).
+//!
+//! ## What is deferred ([D46](../../../docs/m3-decisions.md#d46))
+//!
+//! - **AWS Nitro root cert chain validation.** `verify_root_chain` in
+//!   `verify_attestation` returns `Ok(())` today with a `TODO`. The ES384
+//!   verifier closed in this PR only walks the leaf-cert → message
+//!   signature; chaining the leaf up to the pinned AWS Nitro root is a
+//!   separate (and larger) piece pending the embedded root certificate
+//!   plus an X.509 chain walker.
 
 use std::collections::BTreeMap;
 
@@ -102,9 +109,29 @@ pub enum CoseVerifyError {
     #[error("invalid COSE_Sign1 signature")]
     InvalidSignature,
 
+    /// The supplied leaf cert (X.509 DER) could not be parsed or the SPKI
+    /// did not carry a usable public key for the configured algorithm.
+    /// Emitted by `verify_cose_signature_es384` when the leaf-cert bytes
+    /// are truncated, malformed, or carry a non-P-384 public key.
+    #[error("malformed leaf certificate")]
+    MalformedLeafCert,
+
+    /// The on-wire signature bytes were the wrong shape for the
+    /// configured algorithm (e.g. ES384 expects a fixed-size 96-byte
+    /// `r || s`; anything else surfaces this variant).
+    #[error("malformed COSE_Sign1 signature")]
+    MalformedSignature,
+
+    /// The signature was well-formed but did not verify against the
+    /// computed `tbs_data` under the supplied public key. Distinct from
+    /// `MalformedSignature` (the bytes were structurally OK; verification
+    /// just rejected them).
+    #[error("COSE_Sign1 signature did not verify against tbs_data")]
+    SignatureMismatch,
+
     /// The configured signature algorithm is not yet implemented in this
-    /// crate. Currently emitted by `verify_cose_signature_es384` — see
-    /// [D47](../../../docs/m3-decisions.md#d47).
+    /// crate. Reserved for future expansion; ES384 is now implemented and
+    /// no longer surfaces this variant.
     #[error("COSE_Sign1 algorithm not implemented in this build: {0}")]
     AlgorithmNotImplemented(&'static str),
 }
@@ -430,22 +457,78 @@ pub fn verify_cose_signature(
     })
 }
 
-/// **Stub** — ECDSA-P384 (ES384) verification for real AWS Nitro
-/// attestations. Always returns `AlgorithmNotImplemented`; tracked as
-/// [D47](../../../docs/m3-decisions.md#d47). The wire format and
-/// `tbs_data` flow are identical to the ed25519 path — only the curve
-/// verifier swap is missing.
+/// Verify the COSE_Sign1 signature as ECDSA-P384 (ES384) — the AWS Nitro
+/// production attestation format. Closes
+/// [D47](../../../docs/m3-decisions.md#d47).
+///
+/// `leaf_cert_der` is the leaf X.509 certificate in DER form (taken
+/// verbatim from the attestation document's `certificate` field). The
+/// P-384 public key is extracted from the cert's `SubjectPublicKeyInfo`;
+/// the COSE_Sign1 to-be-signed (`tbs_data`) is then verified against the
+/// on-wire signature.
+///
+/// Wire format ([D50](../../../docs/m3-decisions.md#d50)): COSE_Sign1
+/// carries the ECDSA signature as a **raw 96-byte** concatenation of
+/// `r || s` (NOT DER-encoded). `p384::ecdsa::Signature::from_slice`
+/// accepts this directly.
 ///
 /// # Errors
 ///
-/// Always `CoseVerifyError::AlgorithmNotImplemented`.
+/// - [`CoseVerifyError::MalformedLeafCert`] if `leaf_cert_der` does not
+///   parse as X.509 DER, or the SPKI does not carry a usable P-384
+///   public key.
+/// - [`CoseVerifyError::MalformedSignature`] if the on-wire signature is
+///   not exactly 96 bytes (fixed-size ES384 expects raw `r || s`).
+/// - [`CoseVerifyError::SignatureMismatch`] if the signature is
+///   well-formed but did not verify against the computed `tbs_data`
+///   under the leaf-cert public key.
 pub fn verify_cose_signature_es384(
-    _envelope: &CoseSign1Envelope,
-    _leaf_cert_der: &[u8],
+    envelope: &CoseSign1Envelope,
+    leaf_cert_der: &[u8],
 ) -> Result<(), CoseVerifyError> {
-    Err(CoseVerifyError::AlgorithmNotImplemented(
-        "ECDSA-P384 (ES384) signature verification — see docs/m3-decisions.md D47",
-    ))
+    use p384::ecdsa::{signature::Verifier as _, Signature as P384Signature, VerifyingKey};
+    use x509_cert::{
+        der::{Decode as _, Encode as _},
+        Certificate,
+    };
+
+    // 1. Parse the leaf cert as X.509 DER, extract the SPKI, and pull
+    //    out the SEC1-encoded P-384 public key bytes.
+    let cert =
+        Certificate::from_der(leaf_cert_der).map_err(|_| CoseVerifyError::MalformedLeafCert)?;
+    let spki = &cert.tbs_certificate.subject_public_key_info;
+    let sec1_bytes = spki
+        .subject_public_key
+        .as_bytes()
+        .ok_or(CoseVerifyError::MalformedLeafCert)?;
+    let vk = VerifyingKey::from_sec1_bytes(sec1_bytes)
+        .map_err(|_| CoseVerifyError::MalformedLeafCert)?;
+
+    // 2. Run the RFC 8152 §4.4 `tbs_data` computation via `coset` and
+    //    hand the raw signature bytes to `p384::ecdsa`.
+    //
+    //    `verify_signature`'s closure returns the first error it sees
+    //    from us; we use the typed `CoseVerifyError` variants to
+    //    distinguish "signature shape is wrong" (MalformedSignature) from
+    //    "signature is the right shape but does not verify"
+    //    (SignatureMismatch).
+    //
+    //    Sanity: re-encode the cert and confirm it round-trips. Catches
+    //    callers who pass garbage that happened to parse as a non-cert
+    //    SEQUENCE prefix — vanishingly rare but cheap to check.
+    let _round_trip = cert
+        .to_der()
+        .map_err(|_| CoseVerifyError::MalformedLeafCert)?;
+
+    envelope.cose.verify_signature(&[], |sig_bytes, tbs| {
+        if sig_bytes.len() != 96 {
+            return Err(CoseVerifyError::MalformedSignature);
+        }
+        let sig = P384Signature::from_slice(sig_bytes)
+            .map_err(|_| CoseVerifyError::MalformedSignature)?;
+        vk.verify(tbs, &sig)
+            .map_err(|_| CoseVerifyError::SignatureMismatch)
+    })
 }
 
 /// Construct a synthetic COSE_Sign1 envelope signed with a given ed25519
@@ -480,6 +563,117 @@ pub fn build_test_envelope(
     sign1
         .to_vec()
         .map_err(|e| CoseParseError::MalformedEnvelope(e.to_string()))
+}
+
+/// Construct a synthetic ES384-signed COSE_Sign1 envelope.
+///
+/// Mirror of [`build_test_envelope`] for the AWS Nitro production path.
+/// Sets `alg = ES384` (`-35`) in the protected header, signs `tbs_data`
+/// with the supplied P-384 signing key, and emits a raw 96-byte
+/// (`r || s`) signature exactly as
+/// [D50](../../../docs/m3-decisions.md#d50) prescribes.
+///
+/// `leaf_cert_der` is the X.509 DER bytes that callers will later hand to
+/// `verify_cose_signature_es384` to extract the verification key. The
+/// helper itself doesn't inspect the cert — it only stuffs it into the
+/// payload's `certificate` field (caller's responsibility to ensure the
+/// cert's SPKI carries the public key of `signer_sk`).
+///
+/// # Errors
+///
+/// Returns `CoseParseError::MalformedEnvelope` if encoding fails (should
+/// not happen in practice).
+#[doc(hidden)]
+pub fn build_test_envelope_es384(
+    payload: &AttestationPayload,
+    signer_sk: &p384::ecdsa::SigningKey,
+) -> Result<Vec<u8>, CoseParseError> {
+    use coset::iana;
+    use coset::{CoseSign1Builder, HeaderBuilder};
+    use p384::ecdsa::{signature::Signer as _, Signature as P384Signature};
+
+    let payload_bytes = encode_payload(payload)?;
+    let protected = HeaderBuilder::new()
+        .algorithm(iana::Algorithm::ES384)
+        .build();
+    let sign1 = CoseSign1Builder::new()
+        .protected(protected)
+        .payload(payload_bytes)
+        .create_signature(&[], |tbs| {
+            // p384 emits the fixed-size 96-byte `r || s` form via
+            // Signature::to_bytes; that's exactly what COSE_Sign1 wants
+            // ([D50]).
+            let sig: P384Signature = signer_sk.sign(tbs);
+            sig.to_bytes().to_vec()
+        })
+        .build();
+    sign1
+        .to_vec()
+        .map_err(|e| CoseParseError::MalformedEnvelope(e.to_string()))
+}
+
+/// Test-only helpers shared between this module's tests and the
+/// `verify_attestation` end-to-end tests. Visible to crate-internal tests
+/// (`pub(crate)`) but elided from non-test builds.
+#[cfg(test)]
+pub(crate) mod tests_helpers {
+    /// Generate a deterministic P-384 keypair (the `SigningKey` itself)
+    /// plus a freshly-built self-signed X.509 leaf cert (DER) wrapping
+    /// the matching public key. Both the signer and the cert are emitted
+    /// by pure-Rust RustCrypto crates (`p384` + `x509-cert::builder`);
+    /// see [D49](../../../docs/m3-decisions.md#d49).
+    ///
+    /// `seed_byte` shifts the deterministic seed so callers can produce
+    /// distinct keypairs in the same test.
+    pub(crate) fn es384_keypair_and_cert(seed_byte: u8) -> (p384::ecdsa::SigningKey, Vec<u8>) {
+        use p384::ecdsa::{DerSignature, SigningKey};
+        use std::str::FromStr as _;
+        use x509_cert::{
+            builder::{Builder, CertificateBuilder, Profile},
+            der::Encode as _,
+            name::Name,
+            serial_number::SerialNumber,
+            spki::SubjectPublicKeyInfoOwned,
+            time::Validity,
+        };
+
+        // Deterministic 48-byte scalar (so test failures are
+        // reproducible). The leading byte is forced to 0x01 to keep the
+        // scalar comfortably below the curve order.
+        let mut scalar_bytes = [0u8; 48];
+        for (i, b) in scalar_bytes.iter_mut().enumerate() {
+            // `i` is always 0..48, so the cast is in-range — but go via
+            // wrapping arithmetic on `u8` directly so clippy's truncation
+            // lint is satisfied without an allow attribute.
+            #[allow(clippy::cast_possible_truncation)]
+            let idx = i as u8;
+            *b = idx.wrapping_add(seed_byte) | 0x01;
+        }
+        scalar_bytes[0] = 0x01;
+        let sk =
+            SigningKey::from_bytes((&scalar_bytes).into()).expect("p384 scalar in field order");
+
+        let vk = *sk.verifying_key();
+        let spki =
+            SubjectPublicKeyInfoOwned::from_key(vk).expect("encode P-384 public key into SPKI");
+
+        let subject = Name::from_str("CN=qfc-test-es384-leaf").expect("valid CN");
+        let serial = SerialNumber::from(1u32);
+        let validity = Validity::from_now(core::time::Duration::from_secs(365 * 24 * 60 * 60))
+            .expect("validity");
+
+        // Self-signed; production verifiers walk a chain to the AWS Nitro
+        // root (D46). These tests exercise the leaf parse + verify path
+        // only.
+        let builder = CertificateBuilder::new(Profile::Root, serial, validity, subject, spki, &sk)
+            .expect("CertificateBuilder::new");
+        let cert = builder
+            .build::<DerSignature>()
+            .expect("self-sign synthetic leaf cert");
+        let cert_der = cert.to_der().expect("encode cert to DER");
+
+        (sk, cert_der)
+    }
 }
 
 #[cfg(test)]
@@ -622,15 +816,95 @@ mod tests {
         ));
     }
 
+    // ---------- ES384 (real ECDSA-P384) path -----------------------------
+
+    use super::tests_helpers::es384_keypair_and_cert;
+
+    fn es384_round_trip_envelope() -> (Vec<u8>, p384::ecdsa::SigningKey, Vec<u8>) {
+        let (sk, cert_der) = es384_keypair_and_cert(0x11);
+        let mut payload = sample_payload();
+        // Stuff the leaf cert (X.509 DER) into `certificate` so callers
+        // who consume the parsed payload can hand it back to
+        // `verify_cose_signature_es384` directly.
+        payload.certificate = cert_der.clone();
+        let bytes = build_test_envelope_es384(&payload, &sk).expect("build es384 envelope");
+        (bytes, sk, cert_der)
+    }
+
     #[test]
-    fn es384_stub_returns_not_implemented() {
-        let (bytes, _sk, _payload) = round_trip_envelope();
+    fn es384_round_trip_verifies() {
+        let (bytes, _sk, cert_der) = es384_round_trip_envelope();
         let env = parse_cose_sign1(&bytes).expect("parse");
-        let err = verify_cose_signature_es384(&env, &[]);
-        assert!(matches!(
-            err,
-            Err(CoseVerifyError::AlgorithmNotImplemented(_))
-        ));
+        verify_cose_signature_es384(&env, &cert_der).expect("verifies");
+    }
+
+    #[test]
+    fn es384_tampered_signature_rejected() {
+        let (mut bytes, _sk, cert_der) = es384_round_trip_envelope();
+        // Flip the last byte (in the signature region — well past the
+        // header + payload).
+        let last = bytes.len() - 1;
+        bytes[last] ^= 0xFF;
+        let env = parse_cose_sign1(&bytes).expect("parse still works");
+        let err = verify_cose_signature_es384(&env, &cert_der);
+        assert_eq!(err, Err(CoseVerifyError::SignatureMismatch));
+    }
+
+    #[test]
+    fn es384_tampered_payload_rejected() {
+        let (bytes, _sk, cert_der) = es384_round_trip_envelope();
+        let mut env = parse_cose_sign1(&bytes).expect("parse");
+        let mut p = env.cose.payload.clone().expect("payload present");
+        let n = p.len() / 2;
+        p[n] ^= 0x80;
+        env.cose.payload = Some(p);
+        let err = verify_cose_signature_es384(&env, &cert_der);
+        assert_eq!(err, Err(CoseVerifyError::SignatureMismatch));
+    }
+
+    #[test]
+    fn es384_wrong_leaf_cert_rejected() {
+        // Build the envelope with one keypair, verify against a DIFFERENT
+        // keypair's cert. The signature is well-formed but verifies
+        // against the wrong key — must surface SignatureMismatch.
+        let (bytes, _sk, _cert_der) = es384_round_trip_envelope();
+        let (_wrong_sk, wrong_cert) = es384_keypair_and_cert(0x99);
+        let env = parse_cose_sign1(&bytes).expect("parse");
+        let err = verify_cose_signature_es384(&env, &wrong_cert);
+        assert_eq!(err, Err(CoseVerifyError::SignatureMismatch));
+    }
+
+    #[test]
+    fn es384_truncated_leaf_cert_rejected() {
+        let (bytes, _sk, cert_der) = es384_round_trip_envelope();
+        let env = parse_cose_sign1(&bytes).expect("parse");
+        // Lop off the tail of the DER cert.
+        let truncated = &cert_der[..cert_der.len() / 2];
+        let err = verify_cose_signature_es384(&env, truncated);
+        assert_eq!(err, Err(CoseVerifyError::MalformedLeafCert));
+    }
+
+    #[test]
+    fn es384_garbage_leaf_cert_rejected() {
+        let (bytes, _sk, _cert_der) = es384_round_trip_envelope();
+        let env = parse_cose_sign1(&bytes).expect("parse");
+        let garbage = b"this is not a certificate -- not even close";
+        let err = verify_cose_signature_es384(&env, garbage);
+        assert_eq!(err, Err(CoseVerifyError::MalformedLeafCert));
+    }
+
+    #[test]
+    fn es384_truncated_signature_rejected() {
+        // Build a normal envelope, then surgically remove the last byte
+        // of the on-wire signature (turning a 96-byte sig into 95). The
+        // `coset` parser is structural (it accepts arbitrary bstr
+        // lengths), so we re-emit the inner CoseSign1 with a shortened
+        // signature.
+        let (bytes, _sk, cert_der) = es384_round_trip_envelope();
+        let mut env = parse_cose_sign1(&bytes).expect("parse");
+        env.cose.signature.truncate(env.cose.signature.len() - 1);
+        let err = verify_cose_signature_es384(&env, &cert_der);
+        assert_eq!(err, Err(CoseVerifyError::MalformedSignature));
     }
 
     #[test]
