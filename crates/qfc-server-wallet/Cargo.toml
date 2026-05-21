@@ -53,6 +53,21 @@ utoipa-swagger-ui.workspace = true
 subtle.workspace = true
 hex.workspace = true
 
+# gRPC surface (RFC decision #7).
+tonic = { workspace = true }
+prost = { workspace = true }
+prost-types = { workspace = true }
+tonic-reflection = { workspace = true, optional = true }
+
+[features]
+default = ["reflection"]
+# Enable tonic-reflection so `grpcurl` / `evans` can list services without
+# compiled stubs. Off in prod via `--no-default-features`.
+reflection = ["dep:tonic-reflection"]
+
+[build-dependencies]
+tonic-build = { workspace = true }
+
 [dev-dependencies]
 tempfile.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
@@ -65,3 +80,7 @@ tower.workspace = true
 # transactions to exercise the value-cap hard ceiling).
 alloy-rlp.workspace = true
 async-trait.workspace = true
+# For the gRPC integration tests we need a client and a transport.
+tonic = { workspace = true, features = ["transport"] }
+prost = { workspace = true }
+tokio-stream = { workspace = true }
