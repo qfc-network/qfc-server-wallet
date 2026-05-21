@@ -1,5 +1,7 @@
 # Rust
 /target/
+# Any nested target directories (workspace excludes / standalone clients).
+**/target/
 # The enclave/ Cargo project is a separate workspace and has its own
 # target directory; exclude it too. (Generic `target/` rule would also
 # work but the explicit form documents intent.)
@@ -48,6 +50,11 @@ lcov.info
 
 # Cargo
 **/Cargo.lock.bak
+
+# Node (clients/approver-ts/)
+node_modules/
+clients/approver-ts/dist/
+clients/approver-ts/coverage/
 
 # Secrets — defensive only; real secrets must never be in tree
 *.pem

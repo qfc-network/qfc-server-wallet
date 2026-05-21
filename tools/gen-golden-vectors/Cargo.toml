@@ -1,0 +1,22 @@
+# Standalone helper bin — generates cross-language test fixtures for
+# the approver clients. Excluded from the main workspace (see the root
+# Cargo.toml `workspace.exclude`).
+[workspace]
+
+[package]
+name = "gen-golden-vectors"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "gen-golden-vectors"
+path = "src/main.rs"
+
+[dependencies]
+qfc-quorum = { path = "../../crates/qfc-quorum" }
+qfc-wallet-types = { path = "../../crates/qfc-wallet-types" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+hex = "0.4"
+ulid = { version = "1.1", features = ["serde"] }
