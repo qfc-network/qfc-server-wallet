@@ -11,8 +11,8 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
-qfc-wallet-types = { path = "../qfc-wallet-types", version = "0.0.0" }
-qfc-enclave = { path = "../qfc-enclave", version = "0.0.0" }
+qfc-wallet-types = { path = "../qfc-wallet-types", version = "0.1.0" }
+qfc-enclave = { path = "../qfc-enclave", version = "0.1.0" }
 
 async-trait.workspace = true
 thiserror.workspace = true

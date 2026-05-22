@@ -26,7 +26,7 @@ members = [
 exclude = ["enclave", "clients/approver-rs", "clients/wallet-grpc-rs", "tools/gen-golden-vectors"]
 
 [workspace.package]
-version = "0.0.0"
+version = "0.1.0"
 edition = "2021"
 authors = ["QFC Network <maintainers@qfc.network>"]
 license = "Apache-2.0"

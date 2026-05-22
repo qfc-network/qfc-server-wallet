@@ -19,12 +19,12 @@ name = "qfc-server-wallet"
 path = "src/main.rs"
 
 [dependencies]
-qfc-wallet-types = { path = "../qfc-wallet-types", version = "0.0.0" }
-qfc-enclave = { path = "../qfc-enclave", version = "0.0.0" }
-qfc-sss = { path = "../qfc-sss", version = "0.0.0" }
-qfc-policy = { path = "../qfc-policy", version = "0.0.0" }
-qfc-quorum = { path = "../qfc-quorum", version = "0.0.0" }
-qfc-audit = { path = "../qfc-audit", version = "0.0.0" }
+qfc-wallet-types = { path = "../qfc-wallet-types", version = "0.1.0" }
+qfc-enclave = { path = "../qfc-enclave", version = "0.1.0" }
+qfc-sss = { path = "../qfc-sss", version = "0.1.0" }
+qfc-policy = { path = "../qfc-policy", version = "0.1.0" }
+qfc-quorum = { path = "../qfc-quorum", version = "0.1.0" }
+qfc-audit = { path = "../qfc-audit", version = "0.1.0" }
 
 tokio = { workspace = true, features = ["sync", "rt-multi-thread", "macros", "signal"] }
 async-trait.workspace = true

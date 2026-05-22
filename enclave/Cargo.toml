@@ -7,7 +7,7 @@
 [package]
 name = "qfc-enclave-boot"
 description = "In-EIF boot binary for the QFC server wallet's Nitro Enclave."
-version = "0.0.0"
+version = "0.1.0"
 edition = "2021"
 authors = ["QFC Network <maintainers@qfc.network>"]
 license = "Apache-2.0"
@@ -26,10 +26,10 @@ name = "qfc-enclave-boot"
 path = "src/main.rs"
 
 [dependencies]
-qfc-wallet-types = { path = "../crates/qfc-wallet-types", version = "0.0.0" }
-qfc-sss = { path = "../crates/qfc-sss", version = "0.0.0" }
-qfc-enclave = { path = "../crates/qfc-enclave", version = "0.0.0" }
-qfc-policy = { path = "../crates/qfc-policy", version = "0.0.0" }
+qfc-wallet-types = { path = "../crates/qfc-wallet-types", version = "0.1.0" }
+qfc-sss = { path = "../crates/qfc-sss", version = "0.1.0" }
+qfc-enclave = { path = "../crates/qfc-enclave", version = "0.1.0" }
+qfc-policy = { path = "../crates/qfc-policy", version = "0.1.0" }
 
 tokio = { version = "1.40", features = ["macros", "rt-multi-thread", "sync", "time", "io-util", "net"] }
 serde = { version = "1.0", features = ["derive"] }
