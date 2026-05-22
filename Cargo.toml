@@ -100,6 +100,11 @@ vsss-rs = "4.3"
 
 # Encoding
 hex = "0.4"
+# `hex-literal` — compile-time `hex!("...")` macro. Used by
+# `qfc-enclave::verify_attestation` to pin the SHA-256 fingerprint of
+# the embedded AWS Nitro G1 root certificate (D51). Pure-Rust,
+# proc-macro-only at build time; no runtime surface.
+hex-literal = "0.4"
 bs58 = "0.5"
 base64 = "0.22"
 

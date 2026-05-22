@@ -60,5 +60,8 @@ clients/approver-ts/coverage/
 *.pem
 *.key
 *.p12
+# The AWS Nitro G1 root certificate is PUBLIC and intentionally
+# in-tree — see docs/m3-decisions.md D51. Carve it out of *.pem.
+!crates/qfc-enclave/data/aws-nitro-root-g1.pem
 secrets/
 .claude/
