@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0] — 2026-05-22
+
+First non-bootstrap release. Functional milestones M1 through M5 — workspace foundation, HTTP+gRPC service, real M-of-N quorum, post-quantum signing, and the full Nitro Enclave attestation verification path (mock backend in-process; ready for live AWS swap-in once an account is provisioned). 462 tests across five surfaces (workspace + two stand-alone client crates + the in-EIF boot binary + a TypeScript client). All CI gates green: clippy, rustfmt, rustdoc, cargo-test, cargo-deny, cargo-vet, cargo-audit, proto-sync-check.
+
+See `docs/retro-m1-m2.md`, `docs/retro-m3-m4.md`, and `docs/retro-v1.3.md` for the design rationale + a per-batch list of surprises captured during implementation. See `docs/m{1,3,4,5}-decisions.md`, `docs/grpc-decisions.md`, and `docs/clients-decisions.md` for the per-call non-obvious decisions made along the way (60+ entries total).
+
+What's **not** in this release and remains tracked: live AWS deployment surface (S3+KMS, bit-exact reproducible EIF), `OnChainQfcEventApprover` real chain submission, full QVM method-level decoder, WASM decoder — all gated on either AWS account access or `qfc-core` workspace integration.
+
 ### Added
 - **M3-followup**: X.509 root chain walk + embedded AWS Nitro G1 root — closes [D46](docs/m3-decisions.md#d46), the last attestation-side deferral before M3 GA live AWS work.
   - `qfc-enclave::verify_attestation::verify_root_chain(leaf, cabundle, root, now_ms)` is now real. Parses every cert via [`x509-cert`](https://docs.rs/x509-cert/) (DER for leaf + cabundle; PEM-or-DER for root). Walks adjacent `(child, parent)` pairs and for each link verifies (1) issuer DN == parent subject DN, (2) the parent's `SubjectPublicKeyInfo` is a P-384 SEC1 public key, (3) child's `signature` (DER ECDSA-P384) verifies against the parent's pubkey over `child.tbs_certificate` DER bytes, (4) child's validity window contains `now_ms`. The root itself is also checked self-signed + in-validity (defense in depth). Pure-Rust on `x509-cert` + `p384`; same dep set as the ES384 PR closed in [D47](docs/m3-decisions.md#d47).

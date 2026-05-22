@@ -11,9 +11,9 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
-qfc-wallet-types = { path = "../qfc-wallet-types", version = "0.0.0" }
-qfc-sss = { path = "../qfc-sss", version = "0.0.0" }
-qfc-policy = { path = "../qfc-policy", version = "0.0.0" }
+qfc-wallet-types = { path = "../qfc-wallet-types", version = "0.1.0" }
+qfc-sss = { path = "../qfc-sss", version = "0.1.0" }
+qfc-policy = { path = "../qfc-policy", version = "0.1.0" }
 
 async-trait.workspace = true
 thiserror.workspace = true
