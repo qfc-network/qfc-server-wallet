@@ -489,7 +489,36 @@ with empty defaults when ceilings aren't passed.
 
 ---
 
-## D46 — AWS Nitro root cert chain validation stays deferred; `verify_root_chain` lands as a typed stub
+## D46 — AWS Nitro root cert chain validation — **CLOSED 2026-05-22**
+
+**Status:** CLOSED in `feat/cose-root-chain-walk`. The original deferral
+text below is preserved for the record. The chain walker is now real:
+`verify_root_chain(leaf, cabundle, root, now_ms)` parses every cert via
+`x509-cert`, walks adjacent `(child, parent)` pairs verifying DN linkage
++ ECDSA-P384 signature + validity window, and confirms the chain
+terminates at a self-signed root. The AWS Nitro G1 root certificate is
+embedded in the crate via `include_bytes!` (see
+[D51](#d51)). Callers select the anchor via the new
+`RootAnchor` enum: `AwsNitroG1` (production default), `Custom(&[u8])`
+(test + cross-TEE), or `None` (mock-tier skip). Wired into
+`verify_attestation_with_root` (the new entry point — see
+[D52](#d52)); the pre-D46 `verify_attestation` continues to skip the
+chain walk so M1/M2 mock-tier callers compile unchanged.
+
+Test coverage: 16 new tests in `crates/qfc-enclave/src/verify_attestation.rs`
+(SHA-256 fingerprint pin, self-signed root walk, synthetic 3-cert chain
+happy path, leaf-under-root with empty cabundle, leaf-under-wrong-root
+empty cabundle, tampered intermediate signature, wrong root, truncated
+cabundle, malformed leaf / intermediate / root, validity window check,
+end-to-end `verify_attestation_with_root` happy / wrong-root /
+None-anchor). Workspace test count: 390 → 406 (+16).
+
+The remaining M3-GA work is runtime deployment (S3+KMS, bit-exact EIF,
+live AWS account) — none of which is code on this side.
+
+---
+
+**Original (deferred) text below — kept for the record.**
 
 **What:** The COSE_Sign1 follow-up (`feat/cose-sign1-parse`) lands real
 CBOR parsing + ed25519 envelope verification, but **does not** walk the
@@ -732,5 +761,168 @@ to callers who want to log them separately.
   fixed-size; accepting DER would be a non-spec extension.
 - Use `Signature::from_der`. Rejected — we'd be silently masking
   malformed envelopes.
+
+---
+
+## D51 — Embed the AWS Nitro G1 root cert via `include_bytes!` + SHA-256 pin
+
+**What:** The chain walker closed in this PR ([D46](#d46)) anchors the
+chain at the AWS Nitro Enclaves G1 root certificate. The cert is shipped
+in-tree at `crates/qfc-enclave/data/aws-nitro-root-g1.pem` and read at
+compile time via:
+
+```rust
+pub const AWS_NITRO_ROOT_G1_PEM: &[u8] =
+    include_bytes!("../data/aws-nitro-root-g1.pem");
+pub const AWS_NITRO_ROOT_G1_SHA256: [u8; 32] = hex!(
+    "641a0321a3e244efe456463195d606317ed7cdcc3c1756e09893f3c68f79bb5b"
+);
+```
+
+A test (`embedded_root_sha256_fingerprint_matches`) parses the PEM,
+re-encodes to DER, computes SHA-256, and asserts equality with the
+pinned constant. A second test (`embedded_root_is_self_signed_with_expected_dn`)
+confirms the subject contains `aws.nitro-enclaves` and that subject ==
+issuer (the root IS self-signed). A third (`embedded_root_self_signature_verifies`)
+walks `verify_root_chain` against the root itself to confirm the
+self-signature checks out via the P-384 verifier.
+
+**Why:**
+
+1. **Pure-Rust, no runtime fetch.** `include_bytes!` is `const`; no
+   filesystem / network access at attestation-verify time, no operator
+   provisioning step beyond shipping the binary. Matches the in-enclave
+   minimalism from RFC §1.5.
+2. **SHA-256 pin catches supply-chain swaps.** If anyone (CI infra
+   compromise, malicious PR, accidental file overwrite) replaces the
+   PEM with a different cert, the test fails loudly. The pin is over
+   the **DER body** (not the PEM armor) — PEM whitespace / line-ending
+   normalisation doesn't change the hash.
+3. **AWS publishes the root publicly.** No NDA, no opaque distribution
+   channel — `https://aws-nitro-enclaves.amazonaws.com/AWS_NitroEnclaves_Root-G1.zip`
+   has been served continuously since 2019 and every Nitro verifier in
+   the wild embeds the same cert. There's no operational cost to
+   shipping it in-tree.
+4. **G1 expires 2049-10-28.** ~24 years of headroom; well past M3 GA
+   and any plausible Nitro hardware refresh cycle.
+
+The cert is the SAME bytes AWS distributes; provenance is the public
+download URL above. The SHA-256 we pin matches what every other Nitro
+verifier (`aws-nitro-enclaves-cose`, the `nitro-cli` source, third-party
+open-source verifiers) computes — independent confirmation costs one
+`shasum -a 256 < <(openssl x509 -outform DER)` command.
+
+**Alternatives considered:**
+
+- **Runtime fetch from AWS at verify time.** Rejected — introduces a
+  network dependency in the in-enclave verifier, plus a TOCTOU window
+  between the fetch and the verify. The whole point of attestation is
+  to be fail-closed; fetching the trust anchor over the network
+  defeats the threat model.
+- **Operator-provided path.** Rejected for the default path —
+  operators that want to override the root pass `RootAnchor::Custom`
+  ([D52](#d52)). The default must work without an operator config
+  field they might forget.
+- **Pin via `&[u8; N]` literal.** Rejected — a 521-byte PEM literal in
+  `.rs` is awful to review. `include_bytes!` keeps the cert as a
+  pristine file that diff tools render correctly.
+
+---
+
+## D52 — `RootAnchor` enum + new `verify_attestation_with_root` (vs. mutating the existing fn signature)
+
+**What:** The chain walker is wired in via two surface changes:
+
+1. A new `RootAnchor<'a>` enum with three variants:
+   - `AwsNitroG1` — embedded root (production default).
+   - `Custom(&'a [u8])` — caller-supplied root (DER or PEM accepted),
+     for integration tests + cross-TEE setups.
+   - `None` — skip chain validation entirely (mock tier only; doc
+     warns production callers MUST NOT construct it).
+2. A new entry point `verify_attestation_with_root(doc, pcrs,
+   root_anchor, now_ms, max_age_ms) -> Result<VerifiedAttestation, ...>`
+   that consumes the anchor. The pre-existing `verify_attestation`
+   stays as a back-compat wrapper that calls `verify_attestation_with_root`
+   with `RootAnchor::None` — preserving the pre-D46 behaviour (no
+   chain walk; non-empty cabundle still required).
+
+**Why:** Two design constraints pulled the surface in opposite
+directions:
+
+- **Production callers need the chain walk.** Adding chain validation
+  to `verify_attestation` directly would be the simplest fix — but
+  every M1/M2 caller passes a fake "trust anchor" byte string (e.g.
+  `b"AWS-Nitro-Root-Cert-Stub-M3"`) and a cabundle populated with the
+  same string. Turning on chain validation on the existing function
+  would fail every one of those tests.
+- **Mock-tier callers can't ship a real chain.** The mock attestation
+  flow (`MockEnclave`) is ed25519 + JSON; there's no X.509 chain to
+  walk. Mock tests would have to be re-architected to either generate
+  synthetic certs (heavyweight) or thread through a "skip chain" flag
+  (back-incompatible).
+
+The enum + new entry point lets both worlds coexist without surface
+churn:
+
+- Production callers (the orchestrator, third-party verifiers) call
+  `verify_attestation_with_root(..., RootAnchor::AwsNitroG1, ...)`.
+- Integration tests with synthetic chains call
+  `verify_attestation_with_root(..., RootAnchor::Custom(&root_der), ...)`.
+- The pre-existing `verify_attestation` keeps its M1/M2 contract.
+  Documented as deprecated-for-production; the docstring points new
+  callers at `_with_root`.
+
+The first byte slice param on the old `verify_attestation` (formerly
+`_trust_anchor`) is **kept** for ABI back-compat but **ignored** —
+documented in the function-level Rust docs.
+
+**Alternatives considered:**
+
+- **Add a `root_anchor: RootAnchor<'_>` arg directly to
+  `verify_attestation`.** Rejected — breaks every M1/M2 caller's
+  signature.
+- **Make `verify_attestation` ALWAYS chain-walk against AWS Nitro G1.**
+  Rejected — would force every test to build a synthetic chain just to
+  unit-test PCR / freshness / signature logic. Mock-tier exists
+  precisely so those tests don't need it.
+- **Plumb a `verify_chain: bool` flag through `verify_attestation`.**
+  Rejected — boolean parameters are anti-pattern. An enum carrying the
+  anchor encodes intent at the call site (`RootAnchor::None` is a flag
+  that *explains itself*).
+- **Default-feature flag (`cargo feature = "chain-walk"`).** Rejected
+  — verification semantics in a cargo feature is too easy to get
+  wrong; an operator who builds with the wrong feature set silently
+  ships a downgraded verifier.
+
+---
+
+## D53 — Cabundle order is leaf-most-first (AWS Nitro convention)
+
+**What:** `verify_root_chain` assumes `cabundle` is in leaf-most-first
+order: `cabundle[0]` issued the leaf, `cabundle[i]` issued
+`cabundle[i-1]`, and `root` issued `cabundle[N-1]`. The walker iterates
+adjacent pairs in that order.
+
+**Why:** This is AWS Nitro's documented `cabundle` field order. The
+attestation document's `cabundle` array carries intermediates in the
+order needed to chain the leaf back up to the root. The AWS verifier
+reference implementations (`aws-nitro-enclaves-cose`, the Go and
+TypeScript verifiers, `nitro-cli` itself) all assume this order; we
+match.
+
+The chain walker does NOT sort or re-order the cabundle. If a future
+attestation source emits an unordered cabundle, the caller must sort
+before calling.
+
+**Alternatives considered:**
+
+- **Accept any order; sort by DN matching inside the walker.**
+  Rejected — adds quadratic work, complicates the error-index
+  reporting (a chain that doesn't reconstruct under sort is
+  indistinguishable from a chain with the wrong certs), and
+  contradicts the AWS spec.
+- **Accept root-first order (X.509 PkiPath convention).** Rejected —
+  AWS Nitro emits leaf-first; matching their order is the cheapest
+  cut.
 
 ---

@@ -73,6 +73,8 @@ pub use signers::{
     Secp256k1Signer, ML_DSA_SEED_BYTES,
 };
 pub use verify_attestation::{
-    verify_attestation, verify_mock_attestation, verify_root_chain, AttestationVerifyError,
-    NitroAttestationDoc, PcrConstraint, SignatureKind, VerifiedAttestation,
+    verify_attestation, verify_attestation_with_root, verify_aws_nitro_root_chain,
+    verify_mock_attestation, verify_root_chain, AttestationVerifyError, NitroAttestationDoc,
+    PcrConstraint, RootAnchor, SignatureKind, VerifiedAttestation, AWS_NITRO_ROOT_G1_PEM,
+    AWS_NITRO_ROOT_G1_SHA256,
 };

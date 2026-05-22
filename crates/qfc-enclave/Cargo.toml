@@ -46,6 +46,9 @@ bip39.workspace = true
 
 # Misc
 hex.workspace = true
+# Compile-time `hex!("...")` macro for the SHA-256 fingerprint pin on the
+# embedded AWS Nitro root cert (D51 — see verify_attestation.rs).
+hex-literal.workspace = true
 rand.workspace = true
 rand_core.workspace = true
 primitive-types.workspace = true
