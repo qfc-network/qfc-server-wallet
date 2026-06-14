@@ -8,7 +8,14 @@ Server-side wallet subsystem for the QFC ecosystem: programmable treasury, agent
 - Hash-chained audit log with daily on-chain anchor commitments
 - Reproducible enclave image builds; public attestation verification
 
-**Status:** pre-M1 bootstrap. See [`docs/server-wallet-rfc.md`](docs/server-wallet-rfc.md) for the v1.0 design RFC.
+**Status:** `v0.1.0` — first non-bootstrap release. Functional milestones M1–M5 are
+complete: workspace foundation, HTTP+gRPC service, real M-of-N quorum, post-quantum
+signing (ML-DSA), and the full Nitro Enclave attestation verification path (mock
+backend in-process; ready for live AWS swap-in). 462 tests, all CI gates green. Still
+tracked: live AWS deployment surface (S3+KMS, reproducible EIF), `OnChainQfcEventApprover`
+real chain submission, full QVM method-level decoder, and the WASM decoder — gated on
+AWS account access or `qfc-core` integration. See [`CHANGELOG.md`](CHANGELOG.md) for the
+release notes and [`docs/server-wallet-rfc.md`](docs/server-wallet-rfc.md) for the v1.0 design RFC.
 
 ## Layout
 
@@ -28,11 +35,10 @@ crates/
 The repo ships a complete local-dev stack — server-wallet binary, Postgres,
 OpenTelemetry collector, Mimir (Prometheus-compatible TSDB), and Grafana —
 behind a single `docker compose` file. The compose file is wired to the
-M2 surface (HTTP API on `:8080`, Prometheus exposition on `:9090`,
-Postgres-backed audit, OTLP metrics -> Mimir -> Grafana). Until M2 P1
-lands the server binary is still the M1 stub, but every other service in
-the stack is fully functional and ready to receive traffic the moment
-the new entrypoint ships.
+full M1–M5 surface (HTTP API on `:8080`, Prometheus exposition on `:9090`,
+Postgres-backed audit, OTLP metrics -> Mimir -> Grafana). The server binary
+is the real service; every other service in the stack is fully functional
+and ready to receive traffic.
 
 ### Bring up
 
