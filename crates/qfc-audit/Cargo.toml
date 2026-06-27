@@ -27,6 +27,13 @@ ed25519-dalek.workspace = true
 zeroize.workspace = true
 rand.workspace = true
 
+# On-chain anchor (ChainAnchor): EVM tx signing + JSON-RPC submit. No
+# alloy/ethers — built from the workspace's existing RustCrypto + reqwest
+# deps. See docs/anchor-onchain-decisions.md.
+k256.workspace = true
+sha3.workspace = true
+reqwest.workspace = true
+
 # Async file IO + per-sink lock + spawn for the anchor job
 tokio = { workspace = true, features = ["sync", "fs", "io-util", "rt", "macros", "time"] }
 
@@ -40,3 +47,6 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 testcontainers.workspace = true
 testcontainers-modules.workspace = true
 futures.workspace = true
+# ChainAnchor integration test: stand up a fake JSON-RPC node, assert the
+# raw tx we broadcast recovers to the operator + carries the right calldata.
+wiremock.workspace = true

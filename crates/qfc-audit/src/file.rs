@@ -93,6 +93,28 @@ impl FileAuditSink {
     pub async fn event_count(&self) -> u64 {
         self.state.lock().await.written
     }
+
+    /// Snapshot the current chain head as an
+    /// [`AnchorPayload`](crate::anchor::AnchorPayload), ready for a
+    /// daily anchor submitter (file or on-chain).
+    ///
+    /// `chain_head_hex` is the hash the *next* emit would adopt as its
+    /// `prev_event_hash` — i.e. a commitment to the entire chain so far —
+    /// matching the semantics of the Postgres-backed
+    /// [`anchor_payload`](crate::anchor::anchor_payload). `head_event_id` is
+    /// `None` for the file sink (the in-memory cursor tracks the head hash and
+    /// count, not the last event id); on-chain verifiers key off
+    /// `chain_head_hex` + `event_count`, which are sufficient to detect tail
+    /// truncation.
+    pub async fn current_anchor_payload(&self) -> crate::anchor::AnchorPayload {
+        let state = self.state.lock().await;
+        crate::anchor::AnchorPayload {
+            date_utc: chrono::Utc::now().format("%Y-%m-%d").to_string(),
+            chain_head_hex: hex::encode(state.prev_event_hash),
+            head_event_id: None,
+            event_count: state.written,
+        }
+    }
 }
 
 #[async_trait]
