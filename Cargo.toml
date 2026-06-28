@@ -128,10 +128,10 @@ alloy-rlp = "0.3"
 # Tracing & metrics
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
-tracing-opentelemetry = "0.27"
-opentelemetry = "0.26"
-opentelemetry-otlp = { version = "0.26", features = ["grpc-tonic"] }
-opentelemetry_sdk = { version = "0.26", features = ["rt-tokio"] }
+tracing-opentelemetry = "0.33"
+opentelemetry = "0.32"
+opentelemetry-otlp = { version = "0.32", features = ["grpc-tonic"] }
+opentelemetry_sdk = "0.32"
 metrics = "0.23"
 metrics-exporter-prometheus = { version = "0.15", default-features = false, features = ["http-listener"] }
 
@@ -147,8 +147,10 @@ utoipa = { version = "4", features = ["axum_extras"] }
 utoipa-swagger-ui = { version = "7", features = ["axum"] }
 
 # gRPC surface (RFC decision #7; see docs/grpc-decisions.md).
-# tonic 0.12 is the latest stable line that aligns with prost 0.13 and
-# opentelemetry-otlp 0.26's `grpc-tonic` feature already in the tree.
+# tonic 0.12 / prost 0.13 is the server-side gRPC pin. opentelemetry-otlp
+# 0.32's `grpc-tonic` feature pulls its own tonic 0.14 / prost 0.14 for the
+# OTLP exporter only; the two coexist (cargo-deny multiple-versions = warn)
+# rather than forcing a workspace-wide tonic bump.
 tonic = "0.12"
 tonic-build = "0.12"
 tonic-reflection = "0.12"

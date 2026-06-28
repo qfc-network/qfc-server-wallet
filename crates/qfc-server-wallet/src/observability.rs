@@ -22,8 +22,8 @@ use std::net::SocketAddr;
 use axum::{extract::State, http::StatusCode, response::IntoResponse, routing::get, Router};
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
 use opentelemetry::trace::TracerProvider as _;
-use opentelemetry_otlp::WithExportConfig;
-use opentelemetry_sdk::{runtime, trace as sdktrace, Resource};
+use opentelemetry_otlp::{SpanExporter, WithExportConfig};
+use opentelemetry_sdk::{trace::SdkTracerProvider, Resource};
 use thiserror::Error;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
@@ -87,7 +87,7 @@ pub enum ObservabilityError {
 /// shut down explicitly before the Tokio runtime drops.
 pub struct ObservabilityHandle {
     /// Tracer provider, retained so we can flush spans on shutdown.
-    tracer_provider: Option<sdktrace::TracerProvider>,
+    tracer_provider: Option<SdkTracerProvider>,
     /// Prometheus render handle, always installed; cloneable for the
     /// embedded `/metrics` axum handler.
     prom_handle: PrometheusHandle,
@@ -137,25 +137,11 @@ pub fn init(cfg: ObservabilityConfig) -> Result<ObservabilityHandle, Observabili
         .unwrap_or_else(|_| EnvFilter::new(cfg.log_filter.clone()));
 
     // ---- 2. Optional OTLP tracer provider.
-    let tracer_provider = if let Some(endpoint) = cfg.otlp_endpoint.as_ref() {
-        let exporter = opentelemetry_otlp::new_exporter()
-            .tonic()
-            .with_endpoint(endpoint)
-            .build_span_exporter()
-            .map_err(|e| ObservabilityError::Otlp(e.to_string()))?;
-
-        let config = sdktrace::Config::default().with_resource(Resource::new([
-            opentelemetry::KeyValue::new("service.name", cfg.service_name.clone()),
-        ]));
-
-        let provider = sdktrace::TracerProvider::builder()
-            .with_batch_exporter(exporter, runtime::Tokio)
-            .with_config(config)
-            .build();
-        Some(provider)
-    } else {
-        None
-    };
+    let tracer_provider = cfg
+        .otlp_endpoint
+        .as_ref()
+        .map(|endpoint| build_tracer_provider(endpoint, &cfg.service_name))
+        .transpose()?;
 
     // ---- 3. Install subscriber. We build two distinct subscriber
     //          shapes (with/without the OpenTelemetry layer) and try_init the right
@@ -213,6 +199,42 @@ pub fn init(cfg: ObservabilityConfig) -> Result<ObservabilityHandle, Observabili
         tracer_provider,
         prom_handle,
     })
+}
+
+/// Build the OTLP-over-Tonic batch tracer provider for `endpoint`.
+///
+/// Split out of [`init`] so the migrated opentelemetry 0.32 builder chain
+/// (`SpanExporter::builder().with_tonic()` → `Resource::builder()` →
+/// `SdkTracerProvider::builder().with_batch_exporter()`) is exercised
+/// directly by tests without touching the process-global subscriber.
+///
+/// The Tonic exporter connects lazily, so building it does not require a
+/// reachable collector or even an active network — only a syntactically
+/// valid endpoint URI.
+fn build_tracer_provider(
+    endpoint: &str,
+    service_name: &str,
+) -> Result<SdkTracerProvider, ObservabilityError> {
+    let exporter = SpanExporter::builder()
+        .with_tonic()
+        .with_endpoint(endpoint)
+        .build()
+        .map_err(|e| ObservabilityError::Otlp(e.to_string()))?;
+
+    // `service.name` is now set through the resource builder; the standalone
+    // `trace::Config` type was removed in opentelemetry_sdk 0.30 and the
+    // resource is attached to the provider directly.
+    let resource = Resource::builder()
+        .with_service_name(service_name.to_owned())
+        .build();
+
+    // `with_batch_exporter` no longer takes a runtime argument: the batch
+    // span processor self-hosts a dedicated background thread, so the
+    // `rt-tokio` SDK feature is no longer required.
+    Ok(SdkTracerProvider::builder()
+        .with_batch_exporter(exporter)
+        .with_resource(resource)
+        .build())
 }
 
 /// Register `# HELP` descriptions and units for canonical QFC metrics.
@@ -478,6 +500,27 @@ mod tests {
                 || body.contains("# HELP"),
             "unexpected /metrics body: {body}"
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn otlp_tracer_provider_builds_and_shuts_down() {
+        // Exercises the migrated opentelemetry 0.32 builder chain end to end
+        // without a live collector: the Tonic exporter connects lazily, so a
+        // syntactically valid endpoint is enough to build the provider, emit
+        // a span, and flush on shutdown. Guards against the 0.26→0.32 API
+        // regressions (removed `trace::Config`, `runtime::Tokio`,
+        // `new_exporter()`) reappearing.
+        use opentelemetry::trace::{Tracer, TracerProvider};
+
+        let provider = build_tracer_provider("http://127.0.0.1:4317", "qfc-server-wallet-test")
+            .expect("otlp tracer provider builds against a lazy endpoint");
+
+        let tracer = provider.tracer("otlp-build-test");
+        tracer.in_span("smoke", |_cx| {});
+
+        // shutdown() returns OTelSdkResult; flushing an unreachable collector
+        // may error, but the call must not panic and must be invokable.
+        let _ = provider.shutdown();
     }
 
     #[test]
