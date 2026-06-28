@@ -23,7 +23,7 @@
     "commander": "^12.1.0",
     "express": "^4.21.0",
     "pino": "^9.5.0",
-    "undici": "^6.20.0"
+    "undici": "^6.27.0"
   },
   "devDependencies": {
     "@types/express": "^5.0.0",
