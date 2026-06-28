@@ -14,9 +14,10 @@
 //!    configurable cadence (default: every 24 hours) and invokes a
 //!    user-supplied submitter callback.
 //!
-//! M3 wires the submitter to `qfc-core` so the payload actually lands on
-//! chain. In M2 the callback is just a `Fn` that callers can stub for tests
-//! or use to write the payload to a file / stdout for manual verification.
+//! The submit callback is just a `Fn`; callers can stub it for tests or use
+//! [`LocalFileAnchor`] to write the payload to a JSONL file. For real
+//! on-chain submission see [`ChainAnchor`](crate::chain_anchor::ChainAnchor),
+//! which broadcasts the payload via EVM JSON-RPC (no `qfc-core` dep).
 //!
 //! [`PostgresAuditSink`]: crate::postgres::PostgresAuditSink
 

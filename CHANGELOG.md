@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **On-chain audit anchor (`ChainAnchor`)** — closes the last `qfc-core`-gated deferral on the audit path. The daily audit-chain head is now published on-chain as a real transaction, making tail-truncation by a chain operator detectable (RFC §2.6). `qfc_audit::ChainAnchor` is a drop-in for `LocalFileAnchor`: same `submit(AnchorPayload)` shape, wires straight into `daily_anchor_commit_job_with_reader`.
+  - **No `qfc-core` workspace dependency.** qfc-core exposes tx submission through its EVM-compatible JSON-RPC (`eth_sendRawTransaction`), so `ChainAnchor` speaks plain Ethereum JSON-RPC. It builds a legacy EIP-155 transaction carrying the commitment — `b"qfc-audit-anchor-v1\0" ‖ chain_head[32] ‖ event_count_be[8] ‖ date_utc` — in the calldata of a zero-value self-send, signs it with a secp256k1 operator key, and broadcasts the raw bytes.
+  - **Zero new dependencies.** Built from crates already in the tree: `k256` (secp256k1 recoverable signing via `sign_prehash_recoverable`), `sha3` (keccak256), `reqwest` (JSON-RPC). RLP is hand-rolled (~40 lines) and pinned against the canonical EIP-155 worked-example vector; a second unit test pins the operator-address derivation. No alloy/ethers, no FFI — matches the RFC §1.5 pure-Rust posture, so cargo-deny/vet/audit see no new surface.
+  - **`FileAuditSink::current_anchor_payload()`** — new accessor exposing the live chain head + event count as an `AnchorPayload` so the anchor cron can read from the file-backed sink (previously the read-side helper was Postgres-only).
+  - **Binary wiring** — the daily anchor cron is now spawned from `main.rs`, gated behind `QFC_ANCHOR_RPC_URL` (off by default; dev runs unaffected). New env knobs: `QFC_ANCHOR_OPERATOR_KEY` (required when anchoring), `QFC_ANCHOR_TO`, `QFC_ANCHOR_CHAIN_ID`, `QFC_ANCHOR_GAS_LIMIT`, `QFC_ANCHOR_INTERVAL_SECS`.
+  - Tests: 6 unit (EIP-155 vector, address derivation, RLP scalar edge cases, calldata round-trip/reject) + 1 wiremock integration (full `submit` against a fake JSON-RPC node; asserts the broadcast tx recovers to the operator address and carries the expected calldata). All offline — a funded operator account + live chain remain needed only for true end-to-end exercise.
+  - See [`docs/anchor-onchain-decisions.md`](docs/anchor-onchain-decisions.md).
+
 ## [0.1.0] — 2026-05-22
 
 First non-bootstrap release. Functional milestones M1 through M5 — workspace foundation, HTTP+gRPC service, real M-of-N quorum, post-quantum signing, and the full Nitro Enclave attestation verification path (mock backend in-process; ready for live AWS swap-in once an account is provisioned). 462 tests across five surfaces (workspace + two stand-alone client crates + the in-EIF boot binary + a TypeScript client). All CI gates green: clippy, rustfmt, rustdoc, cargo-test, cargo-deny, cargo-vet, cargo-audit, proto-sync-check.

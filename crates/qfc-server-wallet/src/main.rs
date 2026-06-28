@@ -19,6 +19,12 @@
 //! | `QFC_SERVER_WALLET_API_KEYS`     | (required, comma-separated) | Allow-list for `X-API-Key` (HTTP) and `x-api-key` (gRPC). |
 //! | `QFC_SERVER_WALLET_AUDIT_PATH`   | `./audit.ndjson`           | NDJSON audit sink path                    |
 //! | `QFC_ALLOW_MOCK_ENCLAVE`         | (required = `yes-i-know`)  | Mock-enclave opt-in (M1/M2 dev only)     |
+//! | `QFC_ANCHOR_RPC_URL`             | (unset → anchor disabled)  | EVM JSON-RPC URL; enables the daily on-chain audit anchor |
+//! | `QFC_ANCHOR_OPERATOR_KEY`        | (required if anchoring)    | 32-byte secp256k1 operator key, hex (funds the anchor tx) |
+//! | `QFC_ANCHOR_TO`                  | (operator self-address)    | 20-byte sink address for the anchor commitment, hex       |
+//! | `QFC_ANCHOR_CHAIN_ID`            | (auto via `eth_chainId`)   | Override the EIP-155 chain id             |
+//! | `QFC_ANCHOR_GAS_LIMIT`           | `100000`                   | Gas limit for the anchor self-send        |
+//! | `QFC_ANCHOR_INTERVAL_SECS`       | `86400`                    | Seconds between anchor submissions        |
 //! | `RUST_LOG`                       | `info`                     | tracing-subscriber filter                 |
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
@@ -29,7 +35,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Context;
-use qfc_audit::FileAuditSink;
+use qfc_audit::{
+    daily_anchor_commit_job_with_reader, ChainAnchor, FileAuditSink, DEFAULT_ANCHOR_GAS_LIMIT,
+};
 use qfc_enclave::MockEnclave;
 use qfc_policy::StaticAllowDenyPolicy;
 use qfc_quorum::MockQuorumApprover;
@@ -87,10 +95,18 @@ async fn main() -> anyhow::Result<()> {
     let quorum: Arc<dyn qfc_quorum::QuorumApprover> = Arc::new(MockQuorumApprover::new());
 
     let audit_key = FileAuditSink::random_key();
-    let audit = FileAuditSink::open(&audit_path, audit_key)
-        .await
-        .context("failed to open audit sink")?;
-    let audit: Arc<dyn qfc_audit::AuditSink> = Arc::new(audit);
+    let file_audit = Arc::new(
+        FileAuditSink::open(&audit_path, audit_key)
+            .await
+            .context("failed to open audit sink")?,
+    );
+    let audit: Arc<dyn qfc_audit::AuditSink> = file_audit.clone();
+
+    // Optional: daily on-chain audit anchor. Off unless QFC_ANCHOR_RPC_URL is
+    // set, so dev runs are unaffected. Held in scope so the cron task is not
+    // detached-and-cancelled before the servers come up.
+    let _anchor_job = maybe_spawn_anchor_job(file_audit.clone())
+        .context("on-chain audit anchor configuration invalid")?;
 
     let service = Arc::new(WalletService::new(enclave, shares, policy, quorum, audit));
 
@@ -161,6 +177,85 @@ fn env_flag(name: &str) -> bool {
     std::env::var(name)
         .map(|v| !v.trim().is_empty())
         .unwrap_or(false)
+}
+
+/// Parse a fixed-width hex env value (e.g. a 32-byte key) into `N` bytes.
+fn parse_hex_env<const N: usize>(name: &str) -> anyhow::Result<[u8; N]> {
+    let raw = std::env::var(name).with_context(|| format!("{name} is required"))?;
+    let raw = raw.trim().strip_prefix("0x").unwrap_or(raw.trim());
+    let bytes = hex::decode(raw).with_context(|| format!("{name} must be valid hex"))?;
+    bytes
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("{name} must be exactly {N} bytes"))
+}
+
+/// Spawn the daily on-chain audit-anchor cron, if configured.
+///
+/// Returns `Ok(None)` when `QFC_ANCHOR_RPC_URL` is unset (the default — the
+/// anchor stays off and dev runs are unaffected). When the URL *is* set, the
+/// operator key is mandatory and any misconfiguration is a hard startup error
+/// rather than a silently-disabled anchor.
+fn maybe_spawn_anchor_job(
+    file_audit: Arc<FileAuditSink>,
+) -> anyhow::Result<Option<tokio::task::JoinHandle<()>>> {
+    let Ok(rpc_url) = std::env::var("QFC_ANCHOR_RPC_URL") else {
+        return Ok(None);
+    };
+    if rpc_url.trim().is_empty() {
+        return Ok(None);
+    }
+
+    let operator_key = parse_hex_env::<32>("QFC_ANCHOR_OPERATOR_KEY")?;
+    let to = match std::env::var("QFC_ANCHOR_TO") {
+        Ok(v) if !v.trim().is_empty() => Some(parse_hex_env::<20>("QFC_ANCHOR_TO")?),
+        _ => None,
+    };
+    let chain_id = match std::env::var("QFC_ANCHOR_CHAIN_ID") {
+        Ok(v) if !v.trim().is_empty() => Some(
+            v.trim()
+                .parse()
+                .context("QFC_ANCHOR_CHAIN_ID must be a u64")?,
+        ),
+        _ => None,
+    };
+    let gas_limit = match std::env::var("QFC_ANCHOR_GAS_LIMIT") {
+        Ok(v) if !v.trim().is_empty() => v
+            .trim()
+            .parse()
+            .context("QFC_ANCHOR_GAS_LIMIT must be a u64")?,
+        _ => DEFAULT_ANCHOR_GAS_LIMIT,
+    };
+    let interval_secs: u64 = match std::env::var("QFC_ANCHOR_INTERVAL_SECS") {
+        Ok(v) if !v.trim().is_empty() => v
+            .trim()
+            .parse()
+            .context("QFC_ANCHOR_INTERVAL_SECS must be a u64")?,
+        _ => 24 * 60 * 60,
+    };
+
+    let anchor = ChainAnchor::new(rpc_url, &operator_key, to, chain_id, gas_limit, None)
+        .map_err(|e| anyhow::anyhow!("ChainAnchor init: {e}"))?;
+    tracing::info!(
+        operator = %anchor.operator_address_hex(),
+        interval_secs,
+        "daily on-chain audit anchor enabled"
+    );
+
+    let reader_audit = file_audit;
+    let read = move || {
+        let fa = reader_audit.clone();
+        async move { Ok(fa.current_anchor_payload().await) }
+    };
+    let submit = move |payload| {
+        let anchor = anchor.clone();
+        async move { anchor.submit(payload).await.map(|_| ()) }
+    };
+    let handle = daily_anchor_commit_job_with_reader(
+        std::time::Duration::from_secs(interval_secs),
+        read,
+        submit,
+    );
+    Ok(Some(handle))
 }
 
 async fn shutdown_signal() {
