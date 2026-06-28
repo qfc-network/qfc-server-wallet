@@ -16,6 +16,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Tests: 6 unit (EIP-155 vector, address derivation, RLP scalar edge cases, calldata round-trip/reject) + 1 wiremock integration (full `submit` against a fake JSON-RPC node; asserts the broadcast tx recovers to the operator address and carries the expected calldata). All offline — a funded operator account + live chain remain needed only for true end-to-end exercise.
   - See [`docs/anchor-onchain-decisions.md`](docs/anchor-onchain-decisions.md).
 
+### Changed
+- **OpenTelemetry stack bumped 0.26 → 0.32** (`opentelemetry`, `opentelemetry_sdk`, `opentelemetry-otlp`) plus `tracing-opentelemetry` 0.27 → 0.33, all in lockstep. Supersedes the standalone Dependabot bump (#39), which failed to compile because it moved only `opentelemetry_sdk` and left the rest of the family at 0.26.
+  - `observability.rs` rewritten to the post-0.30 API: `opentelemetry_otlp::new_exporter().tonic().build_span_exporter()` → `SpanExporter::builder().with_tonic().build()`; the removed `trace::Config` + `Resource::new` path → `Resource::builder().with_service_name()` attached directly to the provider; `TracerProvider` → `SdkTracerProvider`; `with_batch_exporter(exporter, runtime::Tokio)` → `with_batch_exporter(exporter)` (the batch span processor now self-hosts a background thread, so the `rt-tokio` SDK feature is dropped).
+  - The OTLP-build path is now covered by a dedicated unit test (`otlp_tracer_provider_builds_and_shuts_down`) that builds the provider against a lazy endpoint, emits a span, and flushes on shutdown — the 0.26 code only exercised the no-OTLP branch.
+  - `opentelemetry-otlp` 0.32's `grpc-tonic` feature pulls its own `tonic` 0.14 / `prost` 0.14 for the exporter; these coexist with the server-side `tonic` 0.12 / `prost` 0.13 gRPC pin (cargo-deny `multiple-versions = warn`) rather than forcing a workspace-wide tonic bump.
+
 ## [0.1.0] — 2026-05-22
 
 First non-bootstrap release. Functional milestones M1 through M5 — workspace foundation, HTTP+gRPC service, real M-of-N quorum, post-quantum signing, and the full Nitro Enclave attestation verification path (mock backend in-process; ready for live AWS swap-in once an account is provisioned). 462 tests across five surfaces (workspace + two stand-alone client crates + the in-EIF boot binary + a TypeScript client). All CI gates green: clippy, rustfmt, rustdoc, cargo-test, cargo-deny, cargo-vet, cargo-audit, proto-sync-check.
