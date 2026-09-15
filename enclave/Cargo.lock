@@ -33,9 +33,9 @@ dependencies = [
 
 [[package]]
 name = "anyhow"
-version = "1.0.102"
+version = "1.0.104"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
+checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
 name = "arrayref"
@@ -321,9 +321,9 @@ dependencies = [
 
 [[package]]
 name = "cmov"
-version = "0.5.3"
+version = "0.5.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3f88a43d011fc4a6876cb7344703e297c71dda42494fee094d5f7c76bf13f746"
+checksum = "0c9ea0ac24bc397ab3c98583a3c9ba74fa56b09a4449bbe172b9b1ddb016027a"
 
 [[package]]
 name = "const-oid"
@@ -482,9 +482,9 @@ dependencies = [
 
 [[package]]
 name = "der"
-version = "0.8.0"
+version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "71fd89660b2dc699704064e59e9dba0147b903e85319429e131620d022be411b"
+checksum = "a878c850e9e421b20262e9b41f9c860e4785fa07541c266b62ff9d1ef998a80a"
 dependencies = [
  "const-oid 0.10.2",
  "zeroize",
@@ -877,6 +877,12 @@ checksum = "fda06d18ac606267c40c04e41b9947729bf8b9efe74bd4e82b61a5f26a510b9f"
 dependencies = [
  "arrayvec",
 ]
+
+[[package]]
+name = "hex-literal"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6fe2267d4ed49bc07b63801559be28c718ea06c4738b7a03c94df7386d2cde46"
 
 [[package]]
 name = "hkdf"
@@ -1280,7 +1286,7 @@ version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "451913da69c775a56034ea8d9003d27ee8948e12443eae7c038ba100a4f21cb7"
 dependencies = [
- "der 0.8.0",
+ "der 0.8.2",
  "spki 0.8.0",
 ]
 
@@ -1361,7 +1367,7 @@ dependencies = [
 
 [[package]]
 name = "qfc-enclave"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "alloy-rlp",
  "async-trait",
@@ -1372,6 +1378,7 @@ dependencies = [
  "coset",
  "ed25519-dalek",
  "hex",
+ "hex-literal",
  "hmac",
  "k256",
  "ml-dsa",
@@ -1399,7 +1406,7 @@ dependencies = [
 
 [[package]]
 name = "qfc-enclave-boot"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1427,7 +1434,7 @@ dependencies = [
 
 [[package]]
 name = "qfc-policy"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "alloy-rlp",
  "async-trait",
@@ -1448,7 +1455,7 @@ dependencies = [
 
 [[package]]
 name = "qfc-sss"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "async-trait",
  "chacha20poly1305",
@@ -1470,7 +1477,7 @@ dependencies = [
 
 [[package]]
 name = "qfc-wallet-types"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "hex",
  "serde",
@@ -1871,7 +1878,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d9efca8738c78ee9484207732f728b1ef517bbb1833d6fc0879ca898a522f6f"
 dependencies = [
  "base64ct",
- "der 0.8.0",
+ "der 0.8.2",
 ]
 
 [[package]]
